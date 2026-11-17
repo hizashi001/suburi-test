@@ -133,7 +133,7 @@ const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
   full: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
 };
-const LOG_KEY = "dodgelab.log.v1", TH_KEY = "dodgelab.th.v2", CAL_KEY = "dodgelab.cal.v2"; // 指標を足したので基準は取り直し
+const LOG_KEY = "dodgelab.log.v1", TH_KEY = "dodgelab.th.v3", CAL_KEY = "dodgelab.cal.v2"; // 指標を足したので基準は取り直し
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- ログ ----------
@@ -244,7 +244,8 @@ let stream = null, landmarker = null, landmarkerKey = "", delegate = "", running
 let session = null;
 let camFrames = 0, poseFrames = 0, inferSum = 0, inferMax = 0, perfTimer = 0;
 let shown = { poseFps: 0, camFps: 0, inferMs: 0, inferMsMax: 0 };
-let lastPose = null;
+let lastPose = null, spokeThisSec = false;
+setInterval(() => { if (window.speechSynthesis?.speaking) spokeThisSec = true; }, 100);
 
 async function loadLandmarker(kind) {
   if (landmarker && landmarkerKey === kind) return;
@@ -369,7 +370,9 @@ function perfTick() {
     inferMs: poseFrames ? +(inferSum / poseFrames).toFixed(1) : 0, inferMsMax: +inferMax.toFixed(1),
   };
   camFrames = poseFrames = inferSum = inferMax = 0;
-  LOG.perf.push({ t: Math.round(now()), sessionId: session?.id, ...shown, body: !!lastPose });
+  // speaking：この1秒に読み上げが鳴っていたか（読み上げで骨格FPSが落ちるかを見る）
+  LOG.perf.push({ t: Math.round(now()), sessionId: session?.id, ...shown, body: !!lastPose, speaking: spokeThisSec || !!window.speechSynthesis?.speaking, measuring: busy });
+  spokeThisSec = false;
   if (LOG.perf.length > 20000) LOG.perf.splice(0, LOG.perf.length - 20000);
   saveLogSoon();
   const a = session?.actual || {};
@@ -399,7 +402,7 @@ const CLASS_IDS = Object.keys(CLASSES).filter((id) => !CLASSES[id].internal);
 const BACK_CM = [10, 20, 30, 50];
 
 // 指標（1コマ分）。frames に残すのはこの順の数値の配列
-const FIELDS = ["shift", "drop", "back", "swDrop", "dz", "tilt", "handUp", "gap", "forearm", "handZ", "handDir"];
+const FIELDS = ["shift", "drop", "back", "swDrop", "dz", "tilt", "handUp", "gap", "forearm", "handZ", "handDir", "gapY"];
 const METRIC_INFO = {
   shift:   { name: "横ずれ", unit: "胴", desc: "肩の中点の横の動き（+が自分の左）", lo: -1, hi: 1 },
   drop:    { name: "沈み", unit: "胴", desc: "肩の中点が下がった量", lo: -0.3, hi: 0.8 },
@@ -411,6 +414,7 @@ const METRIC_INFO = {
   gap:     { name: "両手の間", unit: "胴", desc: "両手首の距離", lo: 0, hi: 1.2 },
   forearm: { name: "前腕の角度", unit: "度", desc: "肘→手首の向き。0=真上、90=横、180=真下", lo: 0, hi: 180 },
   handZ:   { name: "手の前後", unit: "m", desc: "3D推定の手首が肩より前に出ている量（基準との差、+が前）", lo: -0.3, hi: 0.3 },
+  gapY:    { name: "両手の縦の差", unit: "胴", desc: "両手首の上下の差。刀を立てると柄を握る両手が縦に並ぶので大きくなるはず（中段では刀がカメラを向いて重なる）", lo: 0, hi: 0.8 },
   handDir: { name: "手先の向き", unit: "度", desc: "手首→指の付け根（人差し指と小指の中点）の向き。0=真上、180=真下。刀を立てると手首の返しで変わるかを見る", lo: 0, hi: 180 },
 };
 
@@ -420,11 +424,18 @@ const METRIC_INFO = {
 const TH_DEFAULT = {
   crouch: 0.35, step: 0.4, guardUp: 0.1, guardGap: 0.8, hanmiZ: 0.15, hanmiSw: 0.25, hanmiDir: 0.06, back: 0.05, holdMs: 150,
 };
+// v3（Safari実機を見て。ピーク中央：中段 手の高さ0.06・両手の間0.18／刀を立てる 0.15・0.47／
+//   半身右 肩幅の縮み0.19・奥行き差0.095、半身左 0.47・-0.22／中段の肩幅の縮み0.05・奥行き差-0.02／ステップ 横ずれ±0.44〜0.48、半身の横ずれ±0.15〜0.17）
+// ・刀を立てるは手の高さの差が小さく誤検知の元だった。両手の間が開く（柄の上の両手が縦に並ぶ）方を主にし、判定の順番は最後にする
+// ・半身・右は左より動きが小さかったので、肩幅の縮み0.13／奥行き差0.07に下げる
+// ・ステップは横ずれ0.3（半身の横ずれ0.17との間）
+Object.assign(TH_DEFAULT, { step: 0.3, hanmiSw: 0.13, hanmiZ: 0.07, guardUp: 0.0, guardGapMin: 0.35 });
+delete TH_DEFAULT.guardGap;
 const TH_INFO = {
   crouch:  { name: "しゃがみ：沈み >", min: 0.1, max: 1, step: 0.01 },
   step:    { name: "ステップ：横ずれ >", min: 0.1, max: 1.5, step: 0.01 },
-  guardUp: { name: "刀を立てる：手の高さ >", min: 0, max: 1, step: 0.01 },
-  guardGap:{ name: "刀を立てる：両手の間 <", min: 0.2, max: 1.5, step: 0.01 },
+  guardUp: { name: "刀を立てる：手の高さ >", min: -0.3, max: 1, step: 0.01 },
+  guardGapMin:{ name: "刀を立てる：両手の間 >", min: 0.1, max: 1.2, step: 0.01 },
   hanmiZ:  { name: "半身：奥行き差 >", min: 0.03, max: 0.5, step: 0.01 },
   hanmiSw: { name: "半身：肩幅の縮み >", min: 0.05, max: 0.7, step: 0.01 },
   hanmiDir:{ name: "半身の向き：奥行き差 ≥", min: 0, max: 0.2, step: 0.01 },
@@ -440,10 +451,11 @@ function classify(m, th) {
   if (m.drop > th.crouch) return "crouch";
   if (m.shift > th.step) return "stepL";
   if (m.shift < -th.step) return "stepR";
-  if (m.handUp > th.guardUp && m.gap < th.guardGap) return "guard";
   // 半身の向きは奥行き差の符号で決める。差が小さいうちは「向き未定」（ここで決めると左右を取り違えやすい）
   if (Math.abs(m.dz) > th.hanmiZ || m.swDrop > th.hanmiSw) return Math.abs(m.dz) < (th.hanmiDir ?? 0) ? "hanmiX" : m.dz > 0 ? "hanmiR" : "hanmiL";
   if (m.back > th.back) return "back";
+  // 刀を立てるは最後（ほかの動きの途中で手が少し上がったり開いたりするのを拾わないように）
+  if (m.handUp > th.guardUp && m.gap > (th.guardGapMin ?? 0.35)) return "guard";
   return "chudan";
 }
 
@@ -473,7 +485,7 @@ function raw(lm, wl) {
   }
   return {
     smx: sm.x, smy: sm.y, T, sw, leg, tilt: Math.atan2(ls.y - rs.y, ls.x - rs.x) * 180 / Math.PI, // 正面を向けば0度付近（左肩は元の映像の右側）
-    handUp: (sm.y - hand.y) / T, gap: dist(lw, rw) / T, forearm, handDir, dz, handZ,
+    handUp: (sm.y - hand.y) / T, gap: dist(lw, rw) / T, gapY: Math.abs(lw.y - rw.y) / T, forearm, handDir, dz, handZ,
   };
 }
 // 基準（calib）と位置の基準（anchor）からの差を指標にする
@@ -489,6 +501,7 @@ function metrics(r, cal, anc) {
     tilt: ((r.tilt - cal.tilt + 540) % 360) - 180,
     handUp: r.handUp - cal.handUp,
     gap: r.gap,
+    gapY: r.gapY,
     forearm: r.forearm,
     handDir: r.handDir,
     handZ: r.handZ == null || cal.handZ == null ? 0 : r.handZ - cal.handZ,
@@ -574,7 +587,7 @@ for (const k of FIELDS) {
 }
 const TH_LINES = { // グラフに引く閾値の線
   shift: () => [TH.step, -TH.step], drop: () => [TH.crouch], back: () => [TH.back], swDrop: () => [TH.hanmiSw],
-  dz: () => [TH.hanmiZ, -TH.hanmiZ], handUp: () => [TH.guardUp], gap: () => [TH.guardGap],
+  dz: () => [TH.hanmiZ, -TH.hanmiZ], handUp: () => [TH.guardUp], gap: () => [TH.guardGapMin],
 };
 let lastDraw = 0;
 function drawMetrics() {
@@ -639,22 +652,36 @@ function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.fl
 
 // 記録したコマ列から、窓の中の判定を出す（閾値を変えて再判定するときもこれ）
 // fields は記録したときの指標の並び（古い試行は指標が少ない。無い指標は 0 とみなす）
-// 半身は「向き未定」の間も続いた時間に数え、向きはその後に初めて決まった向きにする。最後まで決まらなければ奥行き差のピークの符号
+// v3：「最初に続いた動き」ではなく「窓の中で、続いた時間の合計がいちばん長い動き」を答えにする
+//   （v2 では、しゃがみの途中で胴が縮んで「下がり」、動き始めに手が揺れて「刀を立てる」が先に出て、それが答えになっていた）
+// 半身は「向き未定」も含めて1つの動きとして時間を数え、向きは向きが決まっていたコマの時間の多い方。決まらなければ奥行き差のピークの符号
 function judgeFrames(frames, fields, winStart, winEnd, th) {
-  let cur = null, since = 0, first = null;
   const peak = {}, idx = Object.fromEntries((fields || FIELDS).map((k, i) => [k, i + 1]));
   const grp = (c) => (c === "hanmiX" || c === "hanmiR" || c === "hanmiL" ? "hanmi" : c);
+  const segs = []; let seg = null;
+  const dirMs = { hanmiR: 0, hanmiL: 0 };
+  let prevT = null;
   for (const f of frames) {
     const t = f[0]; if (t < winStart || t > winEnd) continue;
     const m = Object.fromEntries(FIELDS.map((k) => [k, idx[k] ? f[idx[k]] : 0]));
     for (const k of FIELDS) { if (peak[k] == null || Math.abs(m[k]) > Math.abs(peak[k])) peak[k] = m[k]; }
-    const c = classify(m, th);
-    if (grp(c) !== cur) { cur = grp(c); since = t; }
-    if (!first && cur !== "chudan" && t - since >= th.holdMs) first = { cls: c, onset: since };
-    else if (first && first.cls === "hanmiX" && (c === "hanmiR" || c === "hanmiL")) first.cls = c;
+    const c = classify(m, th), g = grp(c);
+    const dt = prevT == null ? 0 : t - prevT; prevT = t;
+    if (!seg || seg.g !== g) { seg = { g, start: t, end: t }; segs.push(seg); } else seg.end = t;
+    if (c in dirMs) dirMs[c] += dt;
   }
-  if (first && first.cls === "hanmiX") first.cls = (peak.dz ?? 0) >= 0 ? "hanmiR" : "hanmiL";
-  return { pred: first ? first.cls : "chudan", onsetMs: first ? Math.round(first.onset - winStart) : null, onsetAt: first ? first.onset : null, peak };
+  const total = {}, firstAt = {};
+  for (const s of segs) {
+    if (s.g === "chudan" || s.end - s.start < th.holdMs) continue;
+    total[s.g] = (total[s.g] || 0) + (s.end - s.start);
+    if (firstAt[s.g] == null) firstAt[s.g] = s.start;
+  }
+  let best = null;
+  for (const g in total) if (!best || total[g] > total[best]) best = g;
+  let pred = best || "chudan";
+  if (pred === "hanmi") pred = dirMs.hanmiR > dirMs.hanmiL ? "hanmiR" : dirMs.hanmiL > dirMs.hanmiR ? "hanmiL" : (peak.dz ?? 0) >= 0 ? "hanmiR" : "hanmiL";
+  const onsetAt = best ? firstAt[best] : null;
+  return { pred, onsetMs: onsetAt == null ? null : Math.round(onsetAt - winStart), onsetAt, heldMs: best ? total[best] : 0, peak };
 }
 
 async function runMeasure() {
@@ -829,6 +856,8 @@ function refreshSummary() {
       `モデル ${s.model} / ${s.delegate}`,
       pf ? `骨格FPS 中央${pf.med}（10%点 ${pf.p10} / 90%点 ${pf.p90}）  カメラ実FPS 中央${cf.med}  推論 中央${im.med}ms（90%点 ${im.p90}ms）  計${pf.n}秒` : "計測なし",
     );
+    const sp = stats(p.filter((x) => x.speaking === true).map((x) => x.poseFps)), ns = stats(p.filter((x) => x.speaking === false).map((x) => x.poseFps));
+    if (sp && ns) lines.push(`骨格FPS 読み上げ中 中央${sp.med}（10%点 ${sp.p10}、${sp.n}秒） / 読み上げなし 中央${ns.med}（10%点 ${ns.p10}、${ns.n}秒）`);
   }
   // ラボA（Q1〜Q3）。今の閾値で再判定した値
   const ts = rejudge(LOG.trials.filter((t) => t.kind === "labA"));
@@ -842,12 +871,12 @@ function refreshSummary() {
       lines.push(`Q2 中段→刀を立てる ${pair("chudan", "guard")}回 / 刀を立てる→中段 ${pair("guard", "chudan")}回`);
       lines.push(`Q1 半身→ステップ ${pair("hanmiR", "stepR") + pair("hanmiR", "stepL") + pair("hanmiL", "stepR") + pair("hanmiL", "stepL")}回 / ステップ→半身 ${pair("stepR", "hanmiR") + pair("stepR", "hanmiL") + pair("stepL", "hanmiR") + pair("stepL", "hanmiL")}回 / 半身の左右逆 ${pair("hanmiR", "hanmiL") + pair("hanmiL", "hanmiR")}回`);
       // ラベルごとの指標のピーク（窓の中で絶対値が最大の値）の中央。閾値を決める材料
-      lines.push("ピーク中央（横ずれ/沈み/下がり/肩幅の縮み/奥行き差m/手の高さ/両手の間/前腕度/手先度）");
+      lines.push("ピーク中央（横ずれ/沈み/下がり/肩幅の縮み/奥行き差m/手の高さ/両手の間/両手の縦の差/前腕度/手先度）");
       const f2 = (v, d = 2) => (v == null ? "-" : v.toFixed(d));
       for (const id of CLASS_IDS) {
         const xs = ts.filter((t) => t.label === id && t.backCm == null); if (!xs.length) continue;
         const pm = (k) => med(xs.map((t) => t.peak?.[k] ?? 0));
-        lines.push(`  ${CLASSES[id].name}: ${f2(pm("shift"))}/${f2(pm("drop"))}/${f2(pm("back"), 3)}/${f2(pm("swDrop"))}/${f2(pm("dz"), 3)}/${f2(pm("handUp"))}/${f2(pm("gap"))}/${f2(pm("forearm"), 0)}/${f2(pm("handDir"), 0)}`);
+        lines.push(`  ${CLASSES[id].name}: ${f2(pm("shift"))}/${f2(pm("drop"))}/${f2(pm("back"), 3)}/${f2(pm("swDrop"))}/${f2(pm("dz"), 3)}/${f2(pm("handUp"))}/${f2(pm("gap"))}/${f2(pm("gapY"))}/${f2(pm("forearm"), 0)}/${f2(pm("handDir"), 0)}`);
       }
       // 外れた試行の中身（奥行き差は窓の中の最大と最小の両方。左右の取り違えの原因を見る）
       const miss = ts.filter((t) => t.backCm == null && !t.correct);

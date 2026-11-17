@@ -1234,7 +1234,10 @@ $("b-preview").onclick = () => runB(true);
 $("btn-stopB").onclick = () => { stopB = true; speechSynthesis?.cancel(); };
 
 // ---- 結果（ラボB） ----
-const telKey = (t) => { const s = [t.tel?.mark && "！", t.tel?.ring && "輪", t.tel?.sound && "音"].filter(Boolean).join("+"); return s ? `${s} ${t.lead}ms前` : "予告なし"; };
+// 予告の早さは帯でまとめる（毎回ばらつかせると1〜2回ずつに散って読めないため）
+const LEAD_BINS = [[200, 450], [450, 650], [650, 850], [850, 1001]];
+const leadBin = (ms) => { const b = LEAD_BINS.find(([a, z]) => ms >= a && ms < z); return b ? `${b[0]}〜${Math.min(1000, b[1] - 50)}ms前` : `${ms}ms前`; };
+const telKey = (t) => { const s = [t.tel?.mark && "！", t.tel?.ring && "輪", t.tel?.sound && "音"].filter(Boolean).join("+"); return s ? `${s} ${leadBin(t.lead)}` : "予告なし"; };
 const spName = (k) => ({ slow: "遅", mid: "中", fast: "速" })[k] || k;
 const pct = (a, b) => (b ? Math.round((100 * a) / b) + "%" : "-");
 function rejudgeB(ts) {

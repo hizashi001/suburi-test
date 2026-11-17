@@ -210,7 +210,7 @@ const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
   full: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
 };
-const LOG_KEY = "dodgelab.log.v1", TH_KEY = "dodgelab.th.v3", CAL_KEY = "dodgelab.cal.v2"; // 指標を足したので基準は取り直し
+const LOG_KEY = "dodgelab.log.v1", TH_KEY = "dodgelab.th.v4", CAL_KEY = "dodgelab.cal.v3"; // 指標を足したので基準は取り直し
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- ログ ----------
@@ -474,12 +474,17 @@ const CLASSES = {
   crouch: { name: "しゃがみ", say: "しゃがむ", color: "#ff8f6b" },
   stepR:  { name: "ステップ・右", say: "右へ、ステップ", color: "#5fd18a" },
   stepL:  { name: "ステップ・左", say: "左へ、ステップ", color: "#5fd18a" },
+  // v4（ラボBの実機で、袈裟などを「斜め前にかがむ」「体を反らす」でよけたため追加。足は動かさず上体だけ）
+  leanR:  { name: "上体・右へ倒す", say: "上体を、右へ", color: "#ff6bd5", extra: true },
+  leanL:  { name: "上体・左へ倒す", say: "上体を、左へ", color: "#ff6bd5", extra: true },
+  sway:   { name: "反らす", say: "反らす", color: "#ff6bd5", extra: true },
+  leanF:  { name: "前にかがむ", say: "前に、かがむ", color: "#ff6bd5", extra: true },
 };
 const CLASS_IDS = Object.keys(CLASSES).filter((id) => !CLASSES[id].internal);
 const BACK_CM = [10, 20, 30, 50];
 
 // 指標（1コマ分）。frames に残すのはこの順の数値の配列
-const FIELDS = ["shift", "drop", "back", "swDrop", "dz", "tilt", "handUp", "gap", "forearm", "handZ", "handDir", "gapY"];
+const FIELDS = ["shift", "drop", "back", "swDrop", "dz", "tilt", "handUp", "gap", "forearm", "handZ", "handDir", "gapY", "hipShift", "leanX", "leanZ"];
 const METRIC_INFO = {
   shift:   { name: "横ずれ", unit: "胴", desc: "肩の中点の横の動き（+が自分の左）", lo: -1, hi: 1 },
   drop:    { name: "沈み", unit: "胴", desc: "肩の中点が下がった量", lo: -0.3, hi: 0.8 },
@@ -492,6 +497,9 @@ const METRIC_INFO = {
   forearm: { name: "前腕の角度", unit: "度", desc: "肘→手首の向き。0=真上、90=横、180=真下", lo: 0, hi: 180 },
   handZ:   { name: "手の前後", unit: "m", desc: "3D推定の手首が肩より前に出ている量（基準との差、+が前）", lo: -0.3, hi: 0.3 },
   gapY:    { name: "両手の縦の差", unit: "胴", desc: "両手首の上下の差。刀を立てると柄を握る両手が縦に並ぶので大きくなるはず（中段では刀がカメラを向いて重なる）", lo: 0, hi: 0.8 },
+  hipShift:{ name: "腰の横ずれ", unit: "胴", desc: "腰の中点の横の動き（+が自分の左）。足を運んだかどうか", lo: -1, hi: 1 },
+  leanX:   { name: "上体の横倒し", unit: "胴", desc: "肩の中点が腰の中点より横に出た量（基準との差、+が自分の左）。足は動かさず上体だけ倒すと大きい", lo: -0.6, hi: 0.6 },
+  leanZ:   { name: "上体の前後", unit: "m", desc: "3D推定の肩の中点の奥行き（腰が基準、基準との差）。+が奥＝反らす、−が手前＝前にかがむ", lo: -0.4, hi: 0.4 },
   handDir: { name: "手先の向き", unit: "度", desc: "手首→指の付け根（人差し指と小指の中点）の向き。0=真上、180=真下。刀を立てると手首の返しで変わるかを見る", lo: 0, hi: 180 },
 };
 
@@ -508,9 +516,13 @@ const TH_DEFAULT = {
 // ・ステップは横ずれ0.3（半身の横ずれ0.17との間）
 Object.assign(TH_DEFAULT, { step: 0.3, hanmiSw: 0.13, hanmiZ: 0.07, guardUp: 0.0, guardGapMin: 0.35 });
 delete TH_DEFAULT.guardGap;
+// v4：ステップは「腰が動いた」で見る（肩だけ動くのは上体を倒しただけ）。上体の横倒し・前後は仮の値（実機で決める）
+Object.assign(TH_DEFAULT, { leanX: 0.15, sway: 0.08 });
 const TH_INFO = {
   crouch:  { name: "しゃがみ：沈み >", min: 0.1, max: 1, step: 0.01 },
-  step:    { name: "ステップ：横ずれ >", min: 0.1, max: 1.5, step: 0.01 },
+  step:    { name: "ステップ：腰の横ずれ >", min: 0.1, max: 1.5, step: 0.01 },
+  leanX:   { name: "上体を倒す：横倒し >", min: 0.03, max: 0.6, step: 0.01 },
+  sway:    { name: "反らす／かがむ：前後 m >", min: 0.02, max: 0.4, step: 0.01 },
   guardUp: { name: "刀を立てる：手の高さ >", min: -0.3, max: 1, step: 0.01 },
   guardGapMin:{ name: "刀を立てる：両手の間 >", min: 0.1, max: 1.2, step: 0.01 },
   hanmiZ:  { name: "半身：奥行き差 >", min: 0.03, max: 0.5, step: 0.01 },
@@ -526,10 +538,17 @@ function saveTH() { try { localStorage.setItem(TH_KEY, JSON.stringify(TH)); } ca
 // 判定（1コマ）。上から順に見て、最初に当てはまったもの
 function classify(m, th) {
   if (m.drop > th.crouch) return "crouch";
-  if (m.shift > th.step) return "stepL";
-  if (m.shift < -th.step) return "stepR";
+  // ステップは腰の横ずれで見る（v4）。腰の横ずれを記録していない古い試行は、肩の横ずれで見る
+  const sx = m.hipShift ?? m.shift;
+  if (sx > th.step) return "stepL";
+  if (sx < -th.step) return "stepR";
   // 半身の向きは奥行き差の符号で決める。差が小さいうちは「向き未定」（ここで決めると左右を取り違えやすい）
   if (Math.abs(m.dz) > th.hanmiZ || m.swDrop > th.hanmiSw) return Math.abs(m.dz) < (th.hanmiDir ?? 0) ? "hanmiX" : m.dz > 0 ? "hanmiR" : "hanmiL";
+  // 上体だけ倒す・反らす・前にかがむ（v4）
+  if (m.leanX > (th.leanX ?? 0.15)) return "leanL";
+  if (m.leanX < -(th.leanX ?? 0.15)) return "leanR";
+  if (m.leanZ > (th.sway ?? 0.08)) return "sway";
+  if (m.leanZ < -(th.sway ?? 0.08)) return "leanF";
   if (m.back > th.back) return "back";
   // 刀を立てるは最後（ほかの動きの途中で手が少し上がったり開いたりするのを拾わないように）
   if (m.handUp > th.guardUp && m.gap > (th.guardGapMin ?? 0.35)) return "guard";
@@ -555,13 +574,14 @@ function raw(lm, wl) {
   const forearm = (fa(le, lw) + fa(re, rw)) / 2;
   const tipL = mid(Q(17), Q(19)), tipR = mid(Q(18), Q(20)); // 小指と人差し指の付け根の中点
   const handDir = (fa(lw, tipL) + fa(rw, tipR)) / 2;
-  let dz = null, handZ = null;
+  let dz = null, handZ = null, leanZ = null;
   if (wl) {
     dz = wl[12].z - wl[11].z;
+    leanZ = (wl[11].z + wl[12].z) / 2 - (wl[23].z + wl[24].z) / 2; // 肩の中点の奥行き（腰が基準）
     handZ = ((wl[11].z + wl[12].z) / 2) - ((wl[15].z * vl + wl[16].z * vr) / (vl + vr)); // +が前（カメラ側）
   }
   return {
-    smx: sm.x, smy: sm.y, T, sw, leg, tilt: Math.atan2(ls.y - rs.y, ls.x - rs.x) * 180 / Math.PI, // 正面を向けば0度付近（左肩は元の映像の右側）
+    smx: sm.x, smy: sm.y, hmx: hm.x, hmy: hm.y, leanZ, T, sw, leg, tilt: Math.atan2(ls.y - rs.y, ls.x - rs.x) * 180 / Math.PI, // 正面を向けば0度付近（左肩は元の映像の右側）
     handUp: (sm.y - hand.y) / T, gap: dist(lw, rw) / T, gapY: Math.abs(lw.y - rw.y) / T, forearm, handDir, dz, handZ,
   };
 }
@@ -582,6 +602,9 @@ function metrics(r, cal, anc) {
     forearm: r.forearm,
     handDir: r.handDir,
     handZ: r.handZ == null || cal.handZ == null ? 0 : r.handZ - cal.handZ,
+    hipShift: (r.hmx - anc.hmx) / cal.T,
+    leanX: ((r.smx - r.hmx) - (anc.smx - anc.hmx)) / cal.T,
+    leanZ: r.leanZ == null || anc.leanZ == null ? 0 : r.leanZ - anc.leanZ,
   };
 }
 
@@ -615,10 +638,10 @@ function onPose(lm, wl, t) {
 function avgRaw(t0, t1) {
   const xs = recentRaw.filter((x) => x.t >= t0 && x.t <= t1).map((x) => x.r);
   if (xs.length < 3) return null;
-  const keys = ["smx", "smy", "T", "sw", "tilt", "handUp", "gap", "forearm"];
+  const keys = ["smx", "smy", "hmx", "hmy", "T", "sw", "tilt", "handUp", "gap", "forearm"];
   const o = {};
   for (const k of keys) o[k] = xs.reduce((s, x) => s + x[k], 0) / xs.length;
-  for (const k of ["leg", "dz", "handZ"]) { const v = xs.filter((x) => x[k] != null); o[k] = v.length ? v.reduce((s, x) => s + x[k], 0) / v.length : null; }
+  for (const k of ["leg", "dz", "handZ", "leanZ"]) { const v = xs.filter((x) => x[k] != null); o[k] = v.length ? v.reduce((s, x) => s + x[k], 0) / v.length : null; }
   o.n = xs.length;
   o.sdX = Math.sqrt(xs.reduce((s, x) => s + (x.smx - o.smx) ** 2, 0) / xs.length) / o.T;
   return o;
@@ -707,7 +730,7 @@ $("btn-th-reset").onclick = () => { TH = { ...TH_DEFAULT }; saveTH(); buildTH();
 const chipEl = $("label-chips");
 for (const id of CLASS_IDS) {
   const l = document.createElement("label");
-  l.innerHTML = `<input type="checkbox" value="${id}" checked> ${CLASSES[id].name}`;
+  l.innerHTML = `<input type="checkbox" value="${id}" ${CLASSES[id].extra ? "" : "checked"}> ${CLASSES[id].name}`;
   chipEl.append(l);
 }
 const backEl = $("back-chips");
@@ -740,7 +763,7 @@ function judgeFrames(frames, fields, winStart, winEnd, th) {
   let prevT = null;
   for (const f of frames) {
     const t = f[0]; if (t < winStart || t > winEnd) continue;
-    const m = Object.fromEntries(FIELDS.map((k) => [k, idx[k] ? f[idx[k]] : 0]));
+    const m = Object.fromEntries(FIELDS.map((k) => [k, idx[k] ? f[idx[k]] : undefined]));
     for (const k of FIELDS) { if (peak[k] == null || Math.abs(m[k]) > Math.abs(peak[k])) peak[k] = m[k]; }
     const c = classify(m, th), g = grp(c);
     const dt = prevT == null ? 0 : t - prevT; prevT = t;
@@ -1080,16 +1103,23 @@ function planAttack(o, t0, type) {
 }
 
 // ---- 回避の判定（記録したコマ列から） ----
-const SIZE_KEY = { crouch: "drop", stepL: "shift", stepR: "shift", hanmiR: "swDrop", hanmiL: "swDrop", back: "back", guard: "gap" };
+const SIZE_KEY = { crouch: "drop", stepL: "hipShift", stepR: "hipShift", hanmiR: "swDrop", hanmiL: "swDrop", back: "back", guard: "gap",
+  leanL: "leanX", leanR: "leanX", sway: "leanZ", leanF: "leanZ" };
+const thOf = (cls, th) => ({ crouch: th.crouch, stepL: th.step, stepR: th.step, hanmiR: th.hanmiSw, hanmiL: th.hanmiSw, back: th.back,
+  leanL: th.leanX, leanR: th.leanX, sway: th.sway, leanF: th.sway })[cls];
+const keyOf = (cls, m) => { const k = SIZE_KEY[cls]; return k === "hipShift" && m.hipShift == null ? "shift" : k; };
+// v4：動きの「始まり」は、閾値を越えた時刻からさかのぼって、主な指標が閾値の3割を越えた時刻とする
+//   （閾値を越えるのは動きがかなり進んでから。ラボBの実機では、越えた時刻が命中の約0.3秒後で「被弾」になっていた）
 function segmentsOf(frames, fields, t0, t1, th) {
   const idx = Object.fromEntries((fields || FIELDS).map((k, i) => [k, i + 1]));
   const grp = (c) => (c === "hanmiX" || c === "hanmiR" || c === "hanmiL" ? "hanmi" : c);
-  const segs = []; let seg = null, prevT = null;
+  const segs = [], pts = []; let seg = null, prevT = null;
   for (const f of frames) {
     const t = f[0]; if (t < t0 || t > t1) continue;
-    const m = Object.fromEntries(FIELDS.map((k) => [k, idx[k] ? f[idx[k]] : 0]));
+    const m = Object.fromEntries(FIELDS.map((k) => [k, idx[k] ? f[idx[k]] : undefined]));
+    pts.push({ t, m });
     const c = classify(m, th), g = grp(c), dt = prevT == null ? 0 : t - prevT; prevT = t;
-    if (!seg || seg.g !== g) { seg = { g, start: t, end: t, dir: { hanmiR: 0, hanmiL: 0 }, peak: {} }; segs.push(seg); } else seg.end = t;
+    if (!seg || seg.g !== g) { seg = { g, start: t, end: t, i0: pts.length - 1, dir: { hanmiR: 0, hanmiL: 0 }, peak: {} }; segs.push(seg); } else seg.end = t;
     if (c in seg.dir) seg.dir[c] += dt;
     for (const k of FIELDS) if (seg.peak[k] == null || Math.abs(m[k]) > Math.abs(seg.peak[k])) seg.peak[k] = m[k];
   }
@@ -1099,7 +1129,13 @@ function segmentsOf(frames, fields, t0, t1, th) {
       if (s.dir.hanmiR !== s.dir.hanmiL) cls = s.dir.hanmiR > s.dir.hanmiL ? "hanmiR" : "hanmiL";
       else cls = (s.peak.dz ?? 0) >= 0 ? "hanmiR" : "hanmiL";
     }
-    return { cls, start: Math.round(s.start), end: Math.round(s.end), size: +(s.peak[SIZE_KEY[cls]] ?? 0).toFixed(3) };
+    const key = keyOf(cls, s.peak), thr = thOf(cls, th);
+    let onset = s.start;
+    if (thr != null && s.peak[key] != null) {
+      const sign = Math.sign(s.peak[key]) || 1;
+      for (let i = s.i0 - 1; i >= 0; i--) { const v = pts[i].m[key]; if (v == null || v * sign < 0.3 * thr) break; onset = pts[i].t; }
+    }
+    return { cls, onset: Math.round(onset), start: Math.round(s.start), end: Math.round(s.end), size: +(s.peak[key] ?? 0).toFixed(3) };
   });
 }
 function allowed(cls, list) {
@@ -1108,18 +1144,20 @@ function allowed(cls, list) {
 function judgeAttack(tr, th, table, pre, post) {
   const segs = segmentsOf(tr.frames, tr.fields, tr.anchorT, tr.capEnd, th);
   const w0 = tr.hitT - pre, w1 = tr.hitT + post;
-  const ov = (s) => Math.min(s.end, w1) - Math.max(s.start, w0);
+  const st = (s) => s.onset ?? s.start;   // 動きの始まり（v4）
+  const ov = (s) => Math.min(s.end, w1) - Math.max(st(s), w0);
   const inWin = segs.filter((s) => ov(s) >= 0);
   // 回避として数える動き：窓に重なる中で一番長く重なったもの。無ければ動き出し以降の最初の動き（記録用）
-  const dodge = inWin.sort((x, y) => ov(y) - ov(x))[0] || segs.find((s) => s.start >= tr.windupStart - 200) || null;
+  const dodge = [...inWin].sort((x, y) => ov(y) - ov(x))[0] || segs.find((s) => st(s) >= tr.windupStart - 200) || null;
   const ok1 = inWin.length > 0;
   const ok2 = inWin.some((s) => allowed(s.cls, table[tr.type]));
   return {
     segments: segs, dodge,
     success1: ok1, success2: ok2,
-    reactFromTele: dodge && tr.teleT != null ? Math.round(dodge.start - tr.teleT) : null,
-    reactFromHit: dodge ? Math.round(dodge.start - tr.hitT) : null,
-    reactFromWindup: dodge ? Math.round(dodge.start - tr.windupStart) : null,
+    reactFromTele: dodge && tr.teleT != null ? Math.round(st(dodge) - tr.teleT) : null,
+    reactFromHit: dodge ? Math.round(st(dodge) - tr.hitT) : null,
+    crossFromHit: dodge ? Math.round(dodge.start - tr.hitT) : null,   // 閾値を越えた時刻（参考）
+    reactFromWindup: dodge ? Math.round(st(dodge) - tr.windupStart) : null,
   };
 }
 
@@ -1256,6 +1294,8 @@ function summaryB(lines) {
     const xs = ts.filter((t) => t.type === k), match = xs.filter((t) => t.dodge && allowed(t.dodge.cls, t.table)).length;
     lines.push(`- ${ATK[k].name}: ${Object.entries(r.dir[k]).map(([c, n]) => `${c === "none" ? "動きなし" : CLASSES[c].name}${n}`).join(" ")}（正解表どおり ${pct(match, xs.length)}）`);
   }
+  const ons = ts.filter((t) => t.dodge), cr = ons.map((t) => t.crossFromHit).filter((x) => x != null), rh = ons.map((t) => t.reactFromHit);
+  if (ons.length) lines.push(`命中→動きの始まり 中央${q(rh, 0.5)}ms / 命中→閾値を越えた 中央${q(cr, 0.5) ?? "-"}ms（差＝判定の遅れ）`);
   const s = ts.map((t) => t.dodge?.size).filter((x) => x != null);
   if (s.length) lines.push(`動きの大きさ（主な指標のピーク） 中央${q(s.map(Math.abs), 0.5)}`);
 }

@@ -38,6 +38,18 @@
   .th { display:grid; grid-template-columns: 9em 1fr 3.5em; gap:4px 6px; align-items:center; font-size:12px; }
   .chips label { font-size:13px; color:var(--fg); margin-right:8px; white-space:nowrap; }
   [hidden] { display:none !important; }
+  /* ラボB：敵を画面いっぱいに、カメラは右上の小窓 */
+  #enemy { position:absolute; inset:0; width:100%; height:100%; display:none; }
+  body.modeB #enemy { display:block; }
+  body.modeB #video, body.modeB #overlay { inset:auto; right:6px; top:6px; width:26%; height:26%; z-index:2; border:1px solid #444; }
+  body.modeB.camHide #video, body.modeB.camHide #overlay { display:none; }
+  body.modeB #big { font-size:26px; bottom:4px; opacity:.8; }
+  body.modeB #cue { top:8%; font-size:40px; }
+  body.modeB #msg { top:auto; bottom:40px; font-size:14px; z-index:3; }
+  body.runB nav, body.runB .panel { display:none !important; }
+  #btn-stopB { position:absolute; left:8px; bottom:8px; z-index:3; display:none; padding:12px 16px; font-size:16px; background:#333; color:#fff; border:1px solid #666; border-radius:8px; }
+  body.runB #btn-stopB { display:block; }
+  .grid2 { display:grid; grid-template-columns: 8.5em 1fr 3.5em; gap:4px 6px; align-items:center; font-size:12px; }
 </style>
 </head>
 <body>
@@ -48,6 +60,8 @@
 </nav>
 
 <div id="stage">
+  <canvas id="enemy"></canvas>
+  <button id="btn-stopB">止める</button>
   <video id="video" playsinline muted></video>
   <canvas id="overlay"></canvas>
   <div id="hud">カメラ停止中</div>
@@ -112,7 +126,70 @@
   </details>
 </div>
 
-<div class="panel" id="p-B" hidden><div class="mut">ラボB（敵の攻撃と回避）は段階3で作ります。</div></div>
+<div class="panel" id="p-B" hidden>
+  <div class="row">
+    <button class="b main" id="btn-runB">開始</button>
+    <label>回数</label><input type="number" id="b-n" value="10" min="1" max="60" style="width:4em">
+    <label>判定</label>
+    <select id="b-mode">
+      <option value="1">1 なんでも成功</option>
+      <option value="2">2 方向指定</option>
+      <option value="3">3 記録のみ</option>
+    </select>
+  </div>
+  <div class="mut">基準はラボAの「基準を取る」で取ったものを使います。開始すると画面が敵だけになり、左下の「止める」で止まります。</div>
+  <details open><summary>攻撃</summary>
+    <div class="row chips" id="b-types"></div>
+    <div class="row">
+      <label>速さ</label>
+      <select id="b-speed"><option value="slow">遅</option><option value="mid" selected>中</option><option value="fast">速</option><option value="mix">混ぜる</option></select>
+      <label>振り始め→命中 ms 遅</label><input type="number" id="b-ms-slow" value="400" style="width:4.5em">
+      <label>中</label><input type="number" id="b-ms-mid" value="250" style="width:4.5em">
+      <label>速</label><input type="number" id="b-ms-fast" value="150" style="width:4.5em">
+    </div>
+    <div class="row">
+      <label>振りかぶり ms</label><input type="number" id="b-windup" value="500" style="width:4.5em">
+      <label>溜め ms</label><input type="number" id="b-holdmin" value="200" style="width:4.5em"><label>〜</label><input type="number" id="b-holdmax" value="600" style="width:4.5em">
+      <label>構え ms</label><input type="number" id="b-kamaemin" value="1500" style="width:5em"><label>〜</label><input type="number" id="b-kamaemax" value="3500" style="width:5em">
+    </div>
+  </details>
+  <details open><summary>予告</summary>
+    <div class="row chips">
+      <label><input type="checkbox" id="b-tel-mark" checked> 黄色い！</label>
+      <label><input type="checkbox" id="b-tel-ring"> 縮む輪</label>
+      <label><input type="checkbox" id="b-tel-sound"> 音</label>
+      <span class="mut">（全部外す＝予告なし）</span>
+    </div>
+    <div class="grid2"><div>命中の何ms前</div><input type="range" id="b-lead" min="200" max="1000" step="50" value="600"><div id="b-lead-v">600</div></div>
+    <div class="row"><label>予告の早さを毎回ばらつかせる</label><select id="b-leadmix"><option value="0" selected>しない</option><option value="1">200〜1000msから選ぶ</option></select></div>
+  </details>
+  <details><summary>判定の窓と正解表</summary>
+    <div class="row">
+      <label>命中の</label><input type="number" id="b-pre" value="1000" style="width:5em"><label>ms前〜</label>
+      <input type="number" id="b-post" value="150" style="width:4.5em"><label>ms後に動いていれば回避</label>
+    </div>
+    <div class="mut">正解表（モード2）。値に書けるもの：hanmi（半身どちらでも）hanmiR hanmiL step stepR stepL crouch back guard</div>
+    <textarea id="b-table" style="height:110px"></textarea>
+    <div class="row"><button class="b" id="b-table-reset">正解表を初期値に戻す</button></div>
+  </details>
+  <details><summary>敵の見え方</summary>
+    <div class="grid2">
+      <div>大きさ</div><input type="range" id="b-size" min="0.4" max="1.6" step="0.05" value="1"><div id="b-size-v">1</div>
+      <div>コントラスト</div><input type="range" id="b-contrast" min="0.1" max="1" step="0.05" value="1"><div id="b-contrast-v">1</div>
+      <div>上下の位置</div><input type="range" id="b-posy" min="-1" max="1" step="0.05" value="0"><div id="b-posy-v">0</div>
+      <div>左右の位置</div><input type="range" id="b-posx" min="-1" max="1" step="0.05" value="0"><div id="b-posx-v">0</div>
+    </div>
+    <div class="row">
+      <label>カメラの小窓</label><select id="b-cam"><option value="1" selected>出す</option><option value="0">出さない</option></select>
+      <label>結果音</label><select id="b-fb"><option value="1" selected>鳴らす</option><option value="0">鳴らさない</option></select>
+      <button class="b" id="b-preview">攻撃を1回見る（判定なし）</button>
+    </div>
+  </details>
+  <details><summary>結果</summary>
+    <div class="row"><label>対象</label><select id="b-scope"><option value="last">最新の計測</option><option value="all">すべて</option></select><button class="b" id="b-result-btn">表示</button></div>
+    <div id="b-result"></div>
+  </details>
+</div>
 <div class="panel" id="p-C" hidden>
   <div class="row">
     <button class="b" id="btn-dl-json">JSONを保存</button>
@@ -830,10 +907,364 @@ function showResult() {
 $("btn-result").onclick = showResult;
 $("sel-scope").onchange = showResult;
 
+// =====================================================================
+// ラボB：敵の攻撃と回避（段階3：仮の影・単発の攻撃・予告・判定モード1〜3）
+// =====================================================================
+const ATK = {
+  // 仮の影の動き。単位は胴の高さ U、th は刀の向き（0=真上、時計回り＋、画面の向き）、len は刀の見かけの長さ（1=横から見た長さ。カメラを向くほど短い）
+  // 敵はこちらを向いているので、敵の右手側は画面の左
+  kesa:     { name: "袈裟",   windup: { hx: -0.55, hy: -0.95, th: -50, len: 1 },   hit: { hx: 0, hy: -0.2, th: 50, len: 0.75 },   end: { hx: 0.45, hy: 0.45, th: 140, len: 1 } },
+  gyaku:    { name: "逆袈裟", windup: { hx: -0.5, hy: 0.45, th: -140, len: 1 },    hit: { hx: 0, hy: -0.1, th: -60, len: 0.75 },  end: { hx: 0.5, hy: -0.9, th: 30, len: 1 } },
+  yoko:     { name: "横薙ぎ", windup: { hx: -0.75, hy: -0.15, th: -95, len: 1 },   hit: { hx: 0, hy: -0.1, th: -10, len: 0.35 },  end: { hx: 0.75, hy: -0.05, th: 95, len: 1 } },
+  karatake: { name: "唐竹",   windup: { hx: 0, hy: -1.05, th: 0, len: 1 },          hit: { hx: 0, hy: -0.35, th: 5, len: 0.3 },    end: { hx: 0, hy: 0.35, th: 175, len: 0.9 } },
+  tsuki:    { name: "突き",   windup: { hx: 0.1, hy: 0.05, th: 10, len: 0.5, sc: 0.95 }, hit: { hx: 0, hy: -0.15, th: 0, len: 0.12, sc: 1.2 }, end: { hx: 0, hy: -0.15, th: 0, len: 0.12, sc: 1.2 } },
+};
+const KAMAE = { hx: 0.05, hy: 0.1, th: 15, len: 0.45, sc: 1 };
+const ATK_IDS = Object.keys(ATK);
+const TABLE_DEFAULT = { kesa: ["hanmi"], gyaku: ["hanmi"], yoko: ["crouch", "back"], karatake: ["hanmi"], tsuki: ["hanmi", "back"] };
+const BSET_KEY = "dodgelab.labB.v1";
+
+// ---- 設定の保存と読み込み ----
+for (const id of ATK_IDS) {
+  const l = document.createElement("label");
+  l.innerHTML = `<input type="checkbox" value="${id}" checked> ${ATK[id].name}`;
+  $("b-types").append(l);
+}
+const B_INPUTS = ["b-n", "b-mode", "b-speed", "b-ms-slow", "b-ms-mid", "b-ms-fast", "b-windup", "b-holdmin", "b-holdmax", "b-kamaemin", "b-kamaemax",
+  "b-tel-mark", "b-tel-ring", "b-tel-sound", "b-lead", "b-leadmix", "b-pre", "b-post", "b-table", "b-size", "b-contrast", "b-posy", "b-posx", "b-cam", "b-fb"];
+function bGet() {
+  const o = {};
+  for (const id of B_INPUTS) { const el = $(id); o[id] = el.type === "checkbox" ? el.checked : el.value; }
+  o.types = [...$("b-types").querySelectorAll("input:checked")].map((x) => x.value);
+  return o;
+}
+function bSave() { try { localStorage.setItem(BSET_KEY, JSON.stringify(bGet())); } catch {} }
+function bLoad() {
+  let o = null; try { o = JSON.parse(localStorage.getItem(BSET_KEY)); } catch {}
+  $("b-table").value = JSON.stringify(TABLE_DEFAULT, null, 1);
+  if (o) {
+    for (const id of B_INPUTS) { const el = $(id); if (o[id] == null) continue; if (el.type === "checkbox") el.checked = o[id]; else el.value = o[id]; }
+    if (o.types) $("b-types").querySelectorAll("input").forEach((x) => (x.checked = o.types.includes(x.value)));
+  }
+  for (const k of ["lead", "size", "contrast", "posy", "posx"]) $(`b-${k}-v`).textContent = $(`b-${k}`).value;
+  document.body.classList.toggle("camHide", $("b-cam").value === "0");
+}
+bLoad();
+document.querySelectorAll("#p-B input, #p-B select, #p-B textarea").forEach((el) => el.addEventListener("input", () => {
+  for (const k of ["lead", "size", "contrast", "posy", "posx"]) $(`b-${k}-v`).textContent = $(`b-${k}`).value;
+  document.body.classList.toggle("camHide", $("b-cam").value === "0");
+  bSave();
+}));
+$("b-table-reset").onclick = () => { $("b-table").value = JSON.stringify(TABLE_DEFAULT, null, 1); bSave(); };
+function bTable() { try { return JSON.parse($("b-table").value); } catch { alert("正解表の書き方が正しくありません。初期値で判定します"); return TABLE_DEFAULT; } }
+
+// ---- 敵の描画 ----
+const ecv = $("enemy"), eg = ecv.getContext("2d");
+let curAtk = null;              // 今の攻撃（時刻つき）。null なら構えたまま
+const tipTrail = [];
+let flash = null;               // { text, color, until }
+const lerp = (a, b, k) => a + (b - a) * k;
+const clamp01 = (x) => Math.max(0, Math.min(1, x));
+const easeIO = (k) => (k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2);
+const mixPose = (a, b, k) => ({ hx: lerp(a.hx, b.hx, k), hy: lerp(a.hy, b.hy, k), th: lerp(a.th, b.th, k), len: lerp(a.len, b.len, k), sc: lerp(a.sc ?? 1, b.sc ?? 1, k) });
+function poseAt(a, t) {
+  if (!a || t < a.windupStart) return KAMAE;
+  const K = ATK[a.type];
+  if (t < a.windupEnd) return mixPose(KAMAE, K.windup, easeIO(clamp01((t - a.windupStart) / (a.windupEnd - a.windupStart))));
+  if (t < a.strikeStart) return mixPose(K.windup, K.windup, 0);
+  if (t < a.hitT) { const k = clamp01((t - a.strikeStart) / (a.hitT - a.strikeStart)); return mixPose(K.windup, K.hit, k * k); }       // 加速しながら命中へ
+  if (t < a.endT) { const k = clamp01((t - a.hitT) / (a.endT - a.hitT)); return mixPose(K.hit, K.end, 1 - (1 - k) * (1 - k)); }       // 振り抜き
+  if (t < a.recoverEnd) return mixPose(K.end, KAMAE, easeIO(clamp01((t - a.endT) / (a.recoverEnd - a.endT))));
+  return KAMAE;
+}
+function drawEnemy() {
+  requestAnimationFrame(drawEnemy);
+  if (!document.body.classList.contains("modeB")) return;
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  const W = Math.round(ecv.clientWidth * dpr), H = Math.round(ecv.clientHeight * dpr);
+  if (ecv.width !== W || ecv.height !== H) { ecv.width = W; ecv.height = H; }
+  const t = now(), o = bGet(), a = curAtk, p = poseAt(a, t);
+  const con = +o["b-contrast"], size = +o["b-size"];
+  eg.fillStyle = "#0e0e10"; eg.fillRect(0, 0, W, H);
+  const U = Math.min(H * 0.3, W * 0.42) * size * (p.sc ?? 1);
+  const cx = W / 2 + (+o["b-posx"]) * W * 0.3, cy = H * 0.55 + (+o["b-posy"]) * H * 0.25;
+  const X = (x) => cx + x * U, Y = (y) => cy + y * U;
+  const v = Math.round(lerp(14, 235, con)), body = `rgb(${v},${v},${Math.min(255, v + 6)})`;
+  // 刀身は体と見分けられるよう青みのある色
+  const steel = `rgb(${Math.round(lerp(40, 150, con))},${Math.round(lerp(60, 210, con))},${Math.round(lerp(90, 255, con))})`;
+  // 体（腰から上）
+  eg.fillStyle = body; eg.strokeStyle = body; eg.lineCap = "round"; eg.lineJoin = "round";
+  eg.beginPath();
+  eg.moveTo(X(-0.45), Y(-0.42)); eg.lineTo(X(0.45), Y(-0.42)); eg.lineTo(X(0.36), Y(0.6)); eg.lineTo(X(0.42), Y(1.6)); eg.lineTo(X(-0.42), Y(1.6)); eg.lineTo(X(-0.36), Y(0.6)); eg.closePath(); eg.fill();
+  eg.beginPath(); eg.arc(X(0), Y(-0.72), U * 0.2, 0, Math.PI * 2); eg.fill();                 // 頭
+  eg.beginPath(); eg.ellipse(X(0), Y(-0.95), U * 0.06, U * 0.08, 0, 0, Math.PI * 2); eg.fill(); // 髷
+  eg.fillRect(X(-0.07), Y(-0.55), U * 0.14, U * 0.14);                                       // 首
+  // 腕（両肩から手へ。肘は外へ少し曲げる）
+  const hx = X(p.hx), hy = Y(p.hy), rad = (p.th * Math.PI) / 180, dx = Math.sin(rad), dy = -Math.cos(rad);
+  // 体の前を通る腕が体に溶けないよう、暗い縁取りを先に描く
+  const edge = "#0e0e10";
+  for (const [col, w] of [[edge, 0.21], [body, 0.15]]) {
+    eg.strokeStyle = col; eg.lineWidth = U * w;
+    for (const s of [-1, 1]) {
+      const sx = X(0.4 * s), sy = Y(-0.38), ex = lerp(sx, hx, 0.5) + s * U * 0.15, ey = lerp(sy, hy, 0.5) + U * 0.1;
+      eg.beginPath(); eg.moveTo(sx, sy); eg.quadraticCurveTo(ex, ey, hx + s * U * 0.03, hy); eg.stroke();
+    }
+  }
+  // 刀（柄と刀身）
+  const L = U * 1.3 * p.len, tipX = hx + dx * L, tipY = hy + dy * L;
+  for (const [col, w] of [[edge, 0.11], [body, 0.07]]) {
+    eg.lineWidth = U * w; eg.strokeStyle = col;
+    eg.beginPath(); eg.moveTo(hx - dx * U * 0.28 * p.len, hy - dy * U * 0.28 * p.len); eg.lineTo(hx, hy); eg.stroke();
+  }
+  // 振っている間は切先の残像
+  if (a && t >= a.strikeStart && t <= a.endT) { tipTrail.push({ x: tipX, y: tipY, t }); }
+  while (tipTrail.length && t - tipTrail[0].t > 120) tipTrail.shift();
+  if (tipTrail.length > 1) {
+    eg.strokeStyle = steel; eg.globalAlpha = 0.35; eg.lineWidth = U * 0.05;
+    eg.beginPath(); tipTrail.forEach((q, i) => (i ? eg.lineTo(q.x, q.y) : eg.moveTo(q.x, q.y))); eg.stroke(); eg.globalAlpha = 1;
+  }
+  for (const [col, w] of [[edge, 0.085], [steel, 0.045]]) {
+    eg.strokeStyle = col; eg.lineWidth = U * w;
+    eg.beginPath(); eg.moveTo(hx, hy); eg.lineTo(tipX, tipY); eg.stroke();
+  }
+  if (a?.type === "tsuki" && t >= a.strikeStart && t <= a.endT) { eg.fillStyle = steel; eg.beginPath(); eg.arc(tipX, tipY, U * 0.06, 0, Math.PI * 2); eg.fill(); }
+  // 予告
+  if (a && a.teleT != null && t >= a.teleT && t <= a.hitT + 80) {
+    if (a.tel.mark) {
+      eg.fillStyle = "#ffd400"; eg.font = `bold ${Math.round(U * 0.9)}px -apple-system, sans-serif`; eg.textAlign = "center"; eg.textBaseline = "middle";
+      eg.fillText("！", X(0.75), Y(-0.9));
+    }
+    if (a.tel.ring) {
+      const k = clamp01((t - a.teleT) / Math.max(1, a.hitT - a.teleT)), R0 = Math.max(W, H) * 0.55, R1 = U * 0.18;
+      eg.strokeStyle = "#ffd400"; eg.lineWidth = Math.max(4, U * 0.05);
+      eg.beginPath(); eg.arc(X(0), Y(-0.1), lerp(R0, R1, k), 0, Math.PI * 2); eg.stroke();
+    }
+  }
+  if (flash && t < flash.until) {
+    eg.fillStyle = flash.color; eg.font = `bold ${Math.round(Math.min(W, H) * 0.12)}px -apple-system, sans-serif`; eg.textAlign = "center"; eg.textBaseline = "middle";
+    eg.fillText(flash.text, W / 2, H * 0.12);
+  }
+}
+requestAnimationFrame(drawEnemy);
+
+// ---- 音 ----
+function noiseHit(vol = 0.5, ms = 120, f = 1800) {
+  if (!ac) return;
+  const n = Math.round(ac.sampleRate * ms / 1000), buf = ac.createBuffer(1, n, ac.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n);
+  const s = ac.createBufferSource(), bp = ac.createBiquadFilter(), g = ac.createGain();
+  bp.type = "bandpass"; bp.frequency.value = f; g.gain.value = vol;
+  s.buffer = buf; s.connect(bp).connect(g).connect(ac.destination); s.start();
+}
+const teleSound = () => { beep(1568, 70, 0.5); setTimeout(() => beep(1568, 70, 0.5), 110); };
+
+// ---- 1回の攻撃の時刻を決める ----
+const rnd = (a, b) => a + Math.random() * (b - a);
+function planAttack(o, t0, type) {
+  const sp = o["b-speed"] === "mix" ? ["slow", "mid", "fast"][Math.floor(Math.random() * 3)] : o["b-speed"];
+  const strikeMs = +o[`b-ms-${sp}`];
+  const lead = o["b-leadmix"] === "1" ? Math.round(rnd(200, 1000) / 50) * 50 : +o["b-lead"];
+  const tel = { mark: o["b-tel-mark"], ring: o["b-tel-ring"], sound: o["b-tel-sound"] };
+  const hasTel = tel.mark || tel.ring || tel.sound;
+  const a = { type, speed: sp, strikeMs, tel, lead: hasTel ? lead : null };
+  a.windupStart = t0 + rnd(+o["b-kamaemin"], +o["b-kamaemax"]);
+  a.windupEnd = a.windupStart + +o["b-windup"];
+  a.strikeStart = a.windupEnd + rnd(+o["b-holdmin"], +o["b-holdmax"]);
+  a.hitT = a.strikeStart + strikeMs;
+  a.endT = a.hitT + strikeMs * 0.8;
+  a.recoverEnd = a.endT + 700;
+  a.teleT = hasTel ? a.hitT - lead : null;
+  // 位置の基準は、動き出しか予告の早い方の直前に取る
+  a.anchorT = Math.min(a.windupStart, a.teleT ?? Infinity) - 50;
+  return a;
+}
+
+// ---- 回避の判定（記録したコマ列から） ----
+const SIZE_KEY = { crouch: "drop", stepL: "shift", stepR: "shift", hanmiR: "swDrop", hanmiL: "swDrop", back: "back", guard: "gap" };
+function segmentsOf(frames, fields, t0, t1, th) {
+  const idx = Object.fromEntries((fields || FIELDS).map((k, i) => [k, i + 1]));
+  const grp = (c) => (c === "hanmiX" || c === "hanmiR" || c === "hanmiL" ? "hanmi" : c);
+  const segs = []; let seg = null, prevT = null;
+  for (const f of frames) {
+    const t = f[0]; if (t < t0 || t > t1) continue;
+    const m = Object.fromEntries(FIELDS.map((k) => [k, idx[k] ? f[idx[k]] : 0]));
+    const c = classify(m, th), g = grp(c), dt = prevT == null ? 0 : t - prevT; prevT = t;
+    if (!seg || seg.g !== g) { seg = { g, start: t, end: t, dir: { hanmiR: 0, hanmiL: 0 }, peak: {} }; segs.push(seg); } else seg.end = t;
+    if (c in seg.dir) seg.dir[c] += dt;
+    for (const k of FIELDS) if (seg.peak[k] == null || Math.abs(m[k]) > Math.abs(seg.peak[k])) seg.peak[k] = m[k];
+  }
+  return segs.filter((s) => s.g !== "chudan" && s.end - s.start >= th.holdMs).map((s) => {
+    let cls = s.g;
+    if (s.g === "hanmi") {
+      if (s.dir.hanmiR !== s.dir.hanmiL) cls = s.dir.hanmiR > s.dir.hanmiL ? "hanmiR" : "hanmiL";
+      else cls = (s.peak.dz ?? 0) >= 0 ? "hanmiR" : "hanmiL";
+    }
+    return { cls, start: Math.round(s.start), end: Math.round(s.end), size: +(s.peak[SIZE_KEY[cls]] ?? 0).toFixed(3) };
+  });
+}
+function allowed(cls, list) {
+  return (list || []).some((x) => x === cls || (x === "hanmi" && cls.startsWith("hanmi")) || (x === "step" && cls.startsWith("step")));
+}
+function judgeAttack(tr, th, table, pre, post) {
+  const segs = segmentsOf(tr.frames, tr.fields, tr.anchorT, tr.capEnd, th);
+  const w0 = tr.hitT - pre, w1 = tr.hitT + post;
+  const ov = (s) => Math.min(s.end, w1) - Math.max(s.start, w0);
+  const inWin = segs.filter((s) => ov(s) >= 0);
+  // 回避として数える動き：窓に重なる中で一番長く重なったもの。無ければ動き出し以降の最初の動き（記録用）
+  const dodge = inWin.sort((x, y) => ov(y) - ov(x))[0] || segs.find((s) => s.start >= tr.windupStart - 200) || null;
+  const ok1 = inWin.length > 0;
+  const ok2 = inWin.some((s) => allowed(s.cls, table[tr.type]));
+  return {
+    segments: segs, dodge,
+    success1: ok1, success2: ok2,
+    reactFromTele: dodge && tr.teleT != null ? Math.round(dodge.start - tr.teleT) : null,
+    reactFromHit: dodge ? Math.round(dodge.start - tr.hitT) : null,
+    reactFromWindup: dodge ? Math.round(dodge.start - tr.windupStart) : null,
+  };
+}
+
+// ---- 計測（ハンズフリー） ----
+let busyB = false, stopB = false;
+async function sleepUntil(t) { const d = t - now(); if (d > 0) await sleep(d); }
+async function runB(previewOnly = false) {
+  unlockAudio();
+  const o = bGet();
+  if (!o.types.length) { alert("攻撃の種類を1つ以上選んでください"); return; }
+  if (!previewOnly && !running) { alert("先にカメラを開始してください"); return; }
+  if (!previewOnly && !CAL) { alert("先にラボAで「基準を取る」をしてください"); return; }
+  if (busyB || busy) return;
+  busyB = true; busy = true; stopB = false;
+  const n = previewOnly ? 1 : Math.max(1, +o["b-n"] || 1), mode = o["b-mode"], table = bTable();
+  const pre = +o["b-pre"] || 1000, post = +o["b-post"] || 150;
+  document.body.classList.add("runB");
+  const run = { id: (LOG.runs.at(-1)?.id || 0) + 1, kind: previewOnly ? "labB-preview" : "labB", startAt: iso(), n, mode, settings: o, sessionId: session?.id, calAt: CAL?.at };
+  if (!previewOnly) { LOG.runs.push(run); logEvent("run_start", { runId: run.id, kind: "labB", n, mode }); }
+  // 種類は均等に、順番はランダム
+  const types = shuffle(Array.from({ length: n }, (_, i) => o.types[i % o.types.length]));
+  try {
+    if (!previewOnly) { await say(`ラボB。全部で${n}回です。構えて`); await sleep(2500); }
+    for (let i = 0; i < n && !stopB; i++) {
+      const a = planAttack(o, now(), types[i]);
+      curAtk = a;
+      await sleepUntil(a.anchorT);
+      if (stopB) break;
+      if (!previewOnly) {
+        const an = avgRaw(now() - 500, now());
+        if (an) { anchor = { ...an }; smooth = null; }
+        capture = { frames: [] };
+      }
+      if (a.teleT != null && a.tel.sound) setTimeout(teleSound, Math.max(0, a.teleT - now()));
+      setTimeout(() => noiseHit(0.6, 140, 1600), Math.max(0, a.hitT - now()));
+      a.capEnd = a.hitT + Math.max(post, 1200);
+      await sleepUntil(a.capEnd);
+      if (previewOnly) { await sleepUntil(a.recoverEnd); break; }
+      const frames = capture?.frames || []; capture = null;
+      const tr = {
+        id: (LOG.trials.at(-1)?.id || 0) + 1, kind: "labB", runId: run.id, i, mode,
+        type: a.type, count: 1, speed: a.speed, strikeMs: a.strikeMs, tel: a.tel, lead: a.lead,
+        t: Math.round(a.anchorT), at: iso(a.anchorT),
+        windupStart: Math.round(a.windupStart), strikeStart: Math.round(a.strikeStart), teleT: a.teleT == null ? null : Math.round(a.teleT),
+        hitT: Math.round(a.hitT), anchorT: Math.round(a.anchorT), capEnd: Math.round(a.capEnd),
+        windowPre: pre, windowPost: post, table: table[a.type] || [],
+        fps: shown.poseFps, inferMs: shown.inferMs, thresholds: { ...TH },
+        enemy: { size: +o["b-size"], contrast: +o["b-contrast"], posx: +o["b-posx"], posy: +o["b-posy"] },
+        fields: FIELDS, frames,
+      };
+      Object.assign(tr, judgeAttack(tr, TH, table, pre, post));
+      LOG.trials.push(tr); saveLogSoon();
+      // 結果の音と文字（モード3は判定しないので、動きを拾ったかだけ短く知らせる）
+      const ok = mode === "1" ? tr.success1 : mode === "2" ? tr.success2 : null;
+      if (o["b-fb"] === "1") {
+        if (ok === true) { beep(1300, 90); setTimeout(() => beep(1700, 120), 110); }
+        else if (ok === false) beep(220, 350);
+        else beep(tr.dodge ? 900 : 500, 80);
+      }
+      flash = ok === true ? { text: "回避", color: "#5fd18a", until: now() + 700 } : ok === false ? { text: "被弾", color: "#e8664f", until: now() + 700 }
+        : { text: tr.dodge ? CLASSES[tr.dodge.cls].name : "動きなし", color: "#ddd", until: now() + 700 };
+      await sleepUntil(a.recoverEnd + 300);
+    }
+    if (!previewOnly && !stopB) { beep(800, 120); await say("ラボBを終わります"); }
+  } finally {
+    capture = null; curAtk = null; busyB = false; busy = false;
+    document.body.classList.remove("runB");
+    anchor = CAL ? { ...CAL } : null; smooth = null;
+    if (!previewOnly) { run.endAt = iso(); logEvent("run_end", { runId: run.id, stopped: stopB }); saveLogNow(); showResultB(); }
+  }
+}
+$("btn-runB").onclick = () => runB(false);
+$("b-preview").onclick = () => runB(true);
+$("btn-stopB").onclick = () => { stopB = true; speechSynthesis?.cancel(); };
+
+// ---- 結果（ラボB） ----
+const telKey = (t) => { const s = [t.tel?.mark && "！", t.tel?.ring && "輪", t.tel?.sound && "音"].filter(Boolean).join("+"); return s ? `${s} ${t.lead}ms前` : "予告なし"; };
+const spName = (k) => ({ slow: "遅", mid: "中", fast: "速" })[k] || k;
+const pct = (a, b) => (b ? Math.round((100 * a) / b) + "%" : "-");
+function rejudgeB(ts) {
+  const table = bTable();
+  return ts.map((t) => ({ ...t, ...judgeAttack(t, TH, table, t.windowPre, t.windowPost), table: table[t.type] || [] }));
+}
+function analyzeB(ts) {
+  const by = (keyf) => {
+    const g = {};
+    for (const t of ts) {
+      const k = keyf(t); g[k] ||= { n: 0, ok1: 0, ok2: 0, rt: [], rh: [], dodged: 0 };
+      const x = g[k]; x.n++; if (t.success1) x.ok1++; if (t.success2) x.ok2++;
+      if (t.dodge) { x.dodged++; if (t.reactFromTele != null) x.rt.push(t.reactFromTele); x.rh.push(t.reactFromHit); }
+    }
+    return g;
+  };
+  // Q5：攻撃の種類ごとに、どの動きでよけたか
+  const dir = {};
+  for (const t of ts) { dir[t.type] ||= {}; const c = t.dodge ? t.dodge.cls : "none"; dir[t.type][c] = (dir[t.type][c] || 0) + 1; }
+  return { byTel: by(telKey), bySpeed: by((t) => t.speed), byType: by((t) => t.type), dir };
+}
+function q(a, p) { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; }
+function showResultB() {
+  let ts = LOG.trials.filter((t) => t.kind === "labB");
+  if ($("b-scope").value === "last") { const last = LOG.runs.filter((r) => ts.some((t) => t.runId === r.id)).at(-1); ts = last ? ts.filter((t) => t.runId === last.id) : []; }
+  ts = rejudgeB(ts);
+  const el = $("b-result");
+  if (!ts.length) { el.innerHTML = '<div class="mut">まだ試行がありません</div>'; return; }
+  const r = analyzeB(ts);
+  const tbl = (title, g, name = (k) => k) => {
+    let h = `<p>${title}</p><table><tr><th></th><th>回</th><th>成功1</th><th>成功2</th><th>予告→動き 中央</th><th>命中→動き 中央（10%〜90%）</th></tr>`;
+    for (const k in g) { const x = g[k]; h += `<tr><th>${name(k)}</th><td>${x.n}</td><td>${pct(x.ok1, x.n)}</td><td>${pct(x.ok2, x.n)}</td><td>${q(x.rt, 0.5) ?? "-"}</td><td>${q(x.rh, 0.5) ?? "-"}（${q(x.rh, 0.1) ?? "-"}〜${q(x.rh, 0.9) ?? "-"}）</td></tr>`; }
+    return h + "</table>";
+  };
+  let h = tbl("予告ごと", r.byTel) + tbl("速さごと", r.bySpeed, spName) + tbl("攻撃の種類ごと", r.byType, (k) => ATK[k].name);
+  h += "<p>どの動きでよけたか（行＝攻撃）</p><table><tr><th></th>" + [...CLASS_IDS.filter((c) => c !== "chudan"), "none"].map((c) => `<th>${c === "none" ? "動きなし" : CLASSES[c].name}</th>`).join("") + "</tr>";
+  for (const k in r.dir) h += `<tr><th>${ATK[k].name}</th>` + [...CLASS_IDS.filter((c) => c !== "chudan"), "none"].map((c) => `<td>${r.dir[k][c] || ""}</td>`).join("") + "</tr>";
+  h += "</table><p class='mut'>成功1＝何か動いた、成功2＝正解表どおり。時間はms、マイナスは命中より前。今の閾値・正解表で再判定した結果。</p>";
+  el.innerHTML = h;
+}
+$("b-result-btn").onclick = showResultB;
+$("b-scope").onchange = showResultB;
+function summaryB(lines) {
+  const ts = rejudgeB(LOG.trials.filter((t) => t.kind === "labB"));
+  if (!ts.length) return;
+  const r = analyzeB(ts);
+  lines.push("## ラボB（今の閾値・正解表で再判定）", `正解表 ${JSON.stringify(bTable())}`);
+  const modes = {}; for (const t of ts) modes[t.mode] = (modes[t.mode] || 0) + 1;
+  lines.push(`試行 ${ts.length}回（モード別 ${Object.entries(modes).map(([k, v]) => `${k}:${v}`).join(" ")}） 成功1 ${pct(ts.filter((t) => t.success1).length, ts.length)} 成功2 ${pct(ts.filter((t) => t.success2).length, ts.length)}`);
+  const put = (title, g, name = (k) => k) => {
+    lines.push(`${title}（回 / 成功1 / 成功2 / 予告→動き 中央 / 命中→動き 10%・中央・90%）`);
+    for (const k in g) { const x = g[k]; lines.push(`- ${name(k)}: ${x.n} / ${pct(x.ok1, x.n)} / ${pct(x.ok2, x.n)} / ${q(x.rt, 0.5) ?? "-"} / ${q(x.rh, 0.1) ?? "-"}・${q(x.rh, 0.5) ?? "-"}・${q(x.rh, 0.9) ?? "-"}`); }
+  };
+  put("Q4 予告ごと", r.byTel); put("速さごと", r.bySpeed, spName); put("攻撃の種類ごと", r.byType, (k) => ATK[k].name);
+  lines.push("Q5 攻撃ごとのよけ方（正解表と合った割合）");
+  for (const k in r.dir) {
+    const xs = ts.filter((t) => t.type === k), match = xs.filter((t) => t.dodge && allowed(t.dodge.cls, t.table)).length;
+    lines.push(`- ${ATK[k].name}: ${Object.entries(r.dir[k]).map(([c, n]) => `${c === "none" ? "動きなし" : CLASSES[c].name}${n}`).join(" ")}（正解表どおり ${pct(match, xs.length)}）`);
+  }
+  const s = ts.map((t) => t.dodge?.size).filter((x) => x != null);
+  if (s.length) lines.push(`動きの大きさ（主な指標のピーク） 中央${q(s.map(Math.abs), 0.5)}`);
+}
+
 // ---------- メニュー ----------
 document.querySelectorAll("nav button").forEach((b) => b.onclick = () => {
   document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("on", x === b));
   for (const m of ["A", "B", "C"]) $("p-" + m).hidden = m !== b.dataset.mode;
+  document.body.classList.toggle("modeB", b.dataset.mode === "B");
   if (b.dataset.mode === "C") refreshSummary();
   logEvent("mode", { mode: b.dataset.mode });
 });
@@ -897,6 +1328,7 @@ function refreshSummary() {
       lines.push(`検知率80%以上の最小の後退: ${ok.length ? ok[0] + "cm" : "なし"}`);
     }
   }
+  summaryB(lines);
   lines.push(`試行 合計${LOG.trials.length}件`);
   $("summary").value = lines.join("\n");
 }
@@ -920,7 +1352,7 @@ $("btn-clear").onclick = () => {
 };
 
 document.addEventListener("visibilitychange", () => logEvent(document.hidden ? "hidden" : "visible"));
-window.__lab = { get LOG() { return LOG; }, classify, judgeFrames, get TH() { return TH; }, onPose }; // 確認用
+window.__lab = { get LOG() { return LOG; }, classify, judgeFrames, get TH() { return TH; }, onPose, get curAtk() { return curAtk; } }; // 確認用
 </script>
 </body>
 </html>

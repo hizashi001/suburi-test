@@ -12,18 +12,31 @@
   nav { display:flex; gap:4px; padding:6px; padding-top:max(6px, env(safe-area-inset-top)); background:#000; }
   nav button { flex:1; padding:10px 4px; font-size:14px; background:#222; color:var(--fg); border:1px solid #333; border-radius:6px; }
   nav button.on { background:var(--acc); color:#000; font-weight:bold; }
-  #stage { position:relative; flex:1; min-height:0; background:#000; }
+  #stage { position:relative; flex:1; min-height:120px; background:#000; }
   #video, #overlay { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; transform:scaleX(-1); }
-  #hud { position:absolute; left:6px; top:6px; font:12px/1.35 ui-monospace, Menlo, monospace; background:rgba(0,0,0,.6); padding:6px 8px; border-radius:6px; white-space:pre; pointer-events:none; }
+  #hud { position:absolute; left:6px; top:6px; font:11px/1.35 ui-monospace, Menlo, monospace; background:rgba(0,0,0,.6); padding:5px 7px; border-radius:6px; white-space:pre; pointer-events:none; }
+  #big { position:absolute; left:0; right:0; bottom:8px; text-align:center; font-size:44px; font-weight:bold; text-shadow:0 0 8px #000, 0 0 4px #000; pointer-events:none; }
+  #cue { position:absolute; left:0; right:0; top:30%; text-align:center; font-size:56px; font-weight:bold; color:var(--acc); text-shadow:0 0 10px #000; pointer-events:none; }
   #msg { position:absolute; left:0; right:0; top:40%; text-align:center; font-size:18px; padding:0 16px; }
-  .panel { padding:8px; background:#181818; border-top:1px solid #333; max-height:42vh; overflow:auto; }
+  .panel { padding:8px; background:#181818; border-top:1px solid #333; max-height:48vh; overflow:auto; }
   .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:4px 0; }
   .row label { font-size:13px; color:var(--mut); }
   button.b { padding:10px 12px; font-size:15px; background:#2c2c2c; color:var(--fg); border:1px solid #444; border-radius:6px; }
   button.b.main { background:var(--acc); color:#000; font-weight:bold; }
-  select { padding:8px; font-size:14px; background:#222; color:var(--fg); border:1px solid #444; border-radius:6px; }
-  textarea { width:100%; height:160px; font:11px ui-monospace, Menlo, monospace; background:#000; color:#ddd; border:1px solid #333; }
+  button.b:disabled { opacity:.4; }
+  select, input[type=number] { padding:8px; font-size:14px; background:#222; color:var(--fg); border:1px solid #444; border-radius:6px; }
+  textarea { width:100%; height:200px; font:11px ui-monospace, Menlo, monospace; background:#000; color:#ddd; border:1px solid #333; }
+  details { margin:6px 0; border:1px solid #333; border-radius:6px; padding:4px 6px; }
+  summary { font-size:14px; padding:4px 0; }
   .mut { color:var(--mut); font-size:12px; }
+  table { border-collapse:collapse; font-size:12px; }
+  td, th { border:1px solid #333; padding:3px 5px; text-align:right; }
+  th { background:#222; font-weight:normal; }
+  td.diag { background:#1f3a29; } td.bad { background:#4a2320; }
+  .met { display:grid; grid-template-columns: 7.5em 4.2em 1fr; gap:2px 6px; align-items:center; font-size:12px; }
+  .met canvas { width:100%; height:22px; background:#0b0b0b; }
+  .th { display:grid; grid-template-columns: 9em 1fr 3.5em; gap:4px 6px; align-items:center; font-size:12px; }
+  .chips label { font-size:13px; color:var(--fg); margin-right:8px; white-space:nowrap; }
   [hidden] { display:none !important; }
 </style>
 </head>
@@ -38,37 +51,67 @@
   <video id="video" playsinline muted></video>
   <canvas id="overlay"></canvas>
   <div id="hud">カメラ停止中</div>
+  <div id="cue"></div>
+  <div id="big"></div>
   <div id="msg">下の「カメラ開始」を押してください</div>
 </div>
 
-<!-- 共通：カメラ設定（段階1） -->
+<!-- 共通：カメラ設定 -->
 <div class="panel" id="p-common">
   <div class="row">
     <button class="b main" id="btn-cam">カメラ開始</button>
-    <button class="b" id="btn-voice">音声・電子音テスト</button>
-  </div>
-  <div class="row">
+    <button class="b" id="btn-voice">音声テスト</button>
     <label>解像度</label>
     <select id="sel-res">
-      <option value="640x480" selected>640×480（本編と同じ）</option>
+      <option value="640x480" selected>640×480</option>
       <option value="1280x720">1280×720</option>
       <option value="1920x1080">1920×1080</option>
     </select>
-    <label>要求FPS</label>
-    <select id="sel-fps">
-      <option value="30">30</option>
-      <option value="60" selected>60</option>
-    </select>
+    <label>FPS</label>
+    <select id="sel-fps"><option value="30">30</option><option value="60" selected>60</option></select>
     <label>モデル</label>
-    <select id="sel-model">
-      <option value="lite" selected>lite（本編と同じ）</option>
-      <option value="full">full</option>
-    </select>
+    <select id="sel-model"><option value="lite" selected>lite</option><option value="full">full</option></select>
   </div>
-  <div class="mut">設定を変えたら、カメラを止めてからもう一度開始してください。</div>
 </div>
 
-<div class="panel" id="p-A"><div class="mut">ラボA（指標・キャリブレーション・ラベル付き計測）は段階2で作ります。</div></div>
+<!-- ラボA -->
+<div class="panel" id="p-A">
+  <div class="row">
+    <button class="b main" id="btn-calib">基準を取る（中段で3秒）</button>
+    <span class="mut" id="calib-state">基準なし</span>
+  </div>
+  <div class="row">
+    <label>計測</label>
+    <select id="sel-run">
+      <option value="label">ラベル判定</option>
+      <option value="back">下がりの距離</option>
+    </select>
+    <label>各</label><input type="number" id="num-rep" value="3" min="1" max="20" style="width:4em"><label>回</label>
+    <button class="b main" id="btn-run">計測開始</button>
+    <button class="b" id="btn-stop" disabled>止める</button>
+  </div>
+  <div class="row chips" id="label-chips"></div>
+  <div class="row chips" id="back-chips" hidden></div>
+  <div class="row">
+    <label>結果音</label><select id="sel-fb"><option value="1" selected>鳴らす</option><option value="0">鳴らさない</option></select>
+    <label>窓</label><input type="number" id="num-win" value="2500" step="100" min="1000" max="5000" style="width:5.5em"><label>ms</label>
+  </div>
+
+  <details open><summary>指標（基準との差・直近3秒）</summary><div class="met" id="met"></div></details>
+  <details><summary>判定の閾値（動かすと保存。記録済みの試行も再判定できる）</summary>
+    <div class="th" id="th"></div>
+    <div class="row"><button class="b" id="btn-th-reset">初期値に戻す</button></div>
+  </details>
+  <details><summary>結果</summary>
+    <div class="row">
+      <label>対象</label>
+      <select id="sel-scope"><option value="last">最新の計測</option><option value="all">すべて</option></select>
+      <button class="b" id="btn-result">今の閾値で再判定して表示</button>
+    </div>
+    <div id="result"></div>
+  </details>
+</div>
+
 <div class="panel" id="p-B" hidden><div class="mut">ラボB（敵の攻撃と回避）は段階3で作ります。</div></div>
 <div class="panel" id="p-C" hidden>
   <div class="row">
@@ -90,7 +133,8 @@ const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
   full: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
 };
-const LOG_KEY = "dodgelab.log.v1";
+const LOG_KEY = "dodgelab.log.v1", TH_KEY = "dodgelab.th.v1", CAL_KEY = "dodgelab.cal.v1";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- ログ ----------
 function newLog() {
@@ -105,15 +149,19 @@ function newLog() {
     sessions: [],   // カメラを開始するたびに1つ
     events: [],     // { t:ms(経過), at:ISO, type, ... }
     perf: [],       // 1秒ごと { t, poseFps, inferMs, inferMsMax, camFps, sessionId }
-    trials: [],     // 段階2以降で使う
+    calibrations: [],
+    runs: [],       // 計測1回分 { id, kind, startAt, ... }
+    trials: [],     // 1試行 = 1オブジェクト
   };
 }
 let LOG;
 try { LOG = JSON.parse(localStorage.getItem(LOG_KEY)) || newLog(); } catch { LOG = newLog(); }
+LOG.calibrations ||= []; LOG.runs ||= []; LOG.trials ||= [];
 const T0 = performance.now(), T0wall = Date.now();
 const now = () => performance.now();
+const iso = (t = now()) => new Date(T0wall + (t - T0)).toISOString();
 function logEvent(type, data = {}) {
-  const e = { t: Math.round(now()), at: new Date(T0wall + (now() - T0)).toISOString(), type, ...data };
+  const e = { t: Math.round(now()), at: iso(), type, ...data };
   LOG.events.push(e);
   saveLogSoon();
   return e;
@@ -121,11 +169,14 @@ function logEvent(type, data = {}) {
 let saveTimer = 0;
 function saveLogSoon() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    try { localStorage.setItem(LOG_KEY, JSON.stringify(LOG)); }
-    catch (err) { console.warn("ログの保存に失敗", err); }
-  }, 1000);
+  saveTimer = setTimeout(saveLogNow, 1000);
 }
+function saveLogNow() {
+  try { localStorage.setItem(LOG_KEY, JSON.stringify(LOG)); }
+  catch (err) { console.warn("ログの保存に失敗", err); logWarnOnce("ログが端末に入りきりません。ラボCでJSONを保存してから「ログを消す」をしてください"); }
+}
+let warned = false;
+function logWarnOnce(t) { if (warned) return; warned = true; alert(t); }
 logEvent("page_open");
 
 // ---------- 音声・電子音（ハンズフリー用） ----------
@@ -143,12 +194,20 @@ function pickVoice() {
   jaVoice = vs.find((v) => /ja/i.test(v.lang) && /Kyoko|O-ren|Otoya|Hattori/i.test(v.name)) || vs.find((v) => /ja/i.test(v.lang)) || null;
 }
 if (window.speechSynthesis) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+// 読み上げ。読み上げが実際に始まった時刻（onstart）を返す。onstart が来なければ呼んだ時刻
 function say(text) {
-  if (!window.speechSynthesis) return;
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = "ja-JP"; if (jaVoice) u.voice = jaVoice; u.rate = 1.1; u.volume = 1;
-  speechSynthesis.cancel(); speechSynthesis.speak(u);
-  logEvent("say", { text });
+  return new Promise((resolve) => {
+    const called = now();
+    if (!window.speechSynthesis) return resolve(called);
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "ja-JP"; if (jaVoice) u.voice = jaVoice; u.rate = 1.15; u.volume = 1;
+    let done = false;
+    const fin = (t) => { if (done) return; done = true; resolve(t); };
+    u.onstart = () => fin(now());
+    setTimeout(() => fin(called), 600);
+    speechSynthesis.cancel(); speechSynthesis.speak(u);
+    logEvent("say", { text });
+  });
 }
 function beep(f = 880, ms = 120, vol = 0.4) {
   if (!ac) return;
@@ -167,21 +226,19 @@ $("btn-voice").onclick = () => {
 const video = $("video"), cv = $("overlay"), ctx = cv.getContext("2d");
 let stream = null, landmarker = null, landmarkerKey = "", delegate = "", running = false, lastVideoTime = -1, wakeLock = null;
 let session = null;
-// 計測
 let camFrames = 0, poseFrames = 0, inferSum = 0, inferMax = 0, perfTimer = 0;
 let shown = { poseFps: 0, camFps: 0, inferMs: 0, inferMsMax: 0 };
 let lastPose = null;
 
 async function loadLandmarker(kind) {
-  const key = kind;
-  if (landmarker && landmarkerKey === key) return;
+  if (landmarker && landmarkerKey === kind) return;
   if (landmarker) { try { landmarker.close(); } catch {} landmarker = null; }
   const vision = await import(`${VISION}/vision_bundle.mjs`);
   const files = await vision.FilesetResolver.forVisionTasks(`${VISION}/wasm`);
   const opts = (d) => ({ baseOptions: { modelAssetPath: MODELS[kind], delegate: d }, runningMode: "VIDEO", numPoses: 1 });
   try { landmarker = await vision.PoseLandmarker.createFromOptions(files, opts("GPU")); delegate = "GPU"; }
   catch (e) { console.warn("GPU不可、CPUで動かします", e); landmarker = await vision.PoseLandmarker.createFromOptions(files, opts("CPU")); delegate = "CPU"; }
-  landmarkerKey = key;
+  landmarkerKey = kind;
 }
 
 async function startCamera() {
@@ -204,7 +261,7 @@ async function startCamera() {
   const st = track.getSettings ? track.getSettings() : {};
   const caps = track.getCapabilities ? track.getCapabilities() : null;
   session = {
-    id: LOG.sessions.length + 1, startT: Math.round(now()), startAt: new Date().toISOString(),
+    id: LOG.sessions.length + 1, startT: Math.round(now()), startAt: iso(),
     requested: { width: w, height: h, frameRate: fps }, model, delegate,
     actual: { width: st.width ?? video.videoWidth, height: st.height ?? video.videoHeight, frameRate: st.frameRate ?? null, facingMode: st.facingMode ?? null },
     videoSize: { w: video.videoWidth, h: video.videoHeight },
@@ -230,7 +287,8 @@ function stopCamera() {
   if (session) { session.endT = Math.round(now()); logEvent("camera_stop", { sessionId: session.id }); }
   $("btn-cam").textContent = "カメラ開始"; $("btn-cam").disabled = false;
   $("msg").hidden = false; $("msg").textContent = "カメラ停止中";
-  $("hud").textContent = "カメラ停止中";
+  $("hud").textContent = "カメラ停止中"; $("big").textContent = "";
+  lastPose = null;
 }
 $("btn-cam").onclick = () => (stream ? stopCamera() : startCamera());
 
@@ -255,16 +313,18 @@ function loop(gen) {
     const fresh = countCamFrames.rvfc ? newFrame : video.currentTime !== lastVideoTime;
     if (video.readyState >= 2 && fresh) {
       lastVideoTime = video.currentTime; newFrame = false;
-      if (!countCamFrames.rvfc) camFrames++;
       const t0 = now();
-      const res = landmarker.detectForVideo(video, t0);
+      // window.__fakePose はPCでの動作確認用（偽の骨格を流し込む）。実機では使わない
+      const res = window.__fakePose ? window.__fakePose(t0) : landmarker.detectForVideo(video, t0);
       const dt = now() - t0;
       poseFrames++; inferSum += dt; if (dt > inferMax) inferMax = dt;
       if (cv.width !== video.videoWidth) { cv.width = video.videoWidth; cv.height = video.videoHeight; }
       ctx.clearRect(0, 0, cv.width, cv.height);
       const lm = res.landmarks && res.landmarks[0];
-      lastPose = lm ? { t: t0, lm, wl: res.worldLandmarks && res.worldLandmarks[0] } : null;
+      const wl = res.worldLandmarks && res.worldLandmarks[0];
+      lastPose = lm ? { t: t0, lm, wl } : null;
       if (lm) drawSkeleton(lm);
+      onPose(lm, wl, t0);
     }
   } catch (e) { console.error(e); }
   requestAnimationFrame(() => loop(gen));
@@ -298,10 +358,410 @@ function perfTick() {
   saveLogSoon();
   const a = session?.actual || {};
   $("hud").textContent =
-    `骨格FPS  ${shown.poseFps}\n推論     ${shown.inferMs} ms（最大 ${shown.inferMsMax}）\n` +
-    `カメラ   ${a.width}×${a.height}  実 ${shown.camFps} fps（申告 ${a.frameRate ?? "?"}）\n` +
-    `モデル   ${session?.model} / ${delegate}\n体       ${lastPose ? "映っている" : "見えない"}`;
+    `骨格 ${shown.poseFps}fps  推論 ${shown.inferMs}ms（最大${shown.inferMsMax}）\n` +
+    `カメラ ${a.width}×${a.height} 実${shown.camFps}fps（申告${a.frameRate ?? "?"}）\n` +
+    `${session?.model} / ${delegate}  体:${lastPose ? "映っている" : "見えない"}`;
 }
+
+// =====================================================================
+// ラボA：姿勢の指標と判定
+// =====================================================================
+// 座標の約束：MediaPipe の元の映像（左右反転なし）。元の映像の x が大きい方 = プレイヤー自身の左（画面は鏡なので画面でも左）。
+// 長さの単位は、基準を取ったときの胴の長さ（肩の中点〜腰の中点）。
+const CLASSES = {
+  chudan: { name: "中段（何もしない）", say: "そのまま", color: "#ddd" },
+  guard:  { name: "刀を立てる", say: "刀を立てる", color: "#7cc7ff" },
+  hanmiR: { name: "半身・右", say: "半身、右", color: "#f2c14e" },
+  hanmiL: { name: "半身・左", say: "半身、左", color: "#f2c14e" },
+  back:   { name: "下がり", say: "下がる", color: "#c58bff" },
+  crouch: { name: "しゃがみ", say: "しゃがむ", color: "#ff8f6b" },
+  stepR:  { name: "ステップ・右", say: "右へ、ステップ", color: "#5fd18a" },
+  stepL:  { name: "ステップ・左", say: "左へ、ステップ", color: "#5fd18a" },
+};
+const CLASS_IDS = Object.keys(CLASSES);
+const BACK_CM = [10, 20, 30, 50];
+
+// 指標（1コマ分）。frames に残すのはこの順の数値の配列
+const FIELDS = ["shift", "drop", "back", "swDrop", "dz", "tilt", "handUp", "gap", "forearm", "handZ"];
+const METRIC_INFO = {
+  shift:   { name: "横ずれ", unit: "胴", desc: "肩の中点の横の動き（+が自分の左）", lo: -1, hi: 1 },
+  drop:    { name: "沈み", unit: "胴", desc: "肩の中点が下がった量", lo: -0.3, hi: 0.8 },
+  back:    { name: "下がり", unit: "率", desc: "胴の見かけの長さが縮んだ割合（脚が見えれば脚も平均）", lo: -0.15, hi: 0.2 },
+  swDrop:  { name: "肩幅の縮み", unit: "率", desc: "肩幅÷胴の長さ が基準より縮んだ割合（半身で大きく、下がりでは変わらない）", lo: -0.2, hi: 0.6 },
+  dz:      { name: "肩の奥行き差", unit: "m", desc: "3D推定の右肩−左肩の奥行き（+は右肩が奥＝右を引いた）", lo: -0.4, hi: 0.4 },
+  tilt:    { name: "肩の傾き", unit: "度", desc: "肩の線の傾き（基準との差）", lo: -30, hi: 30 },
+  handUp:  { name: "手の高さ", unit: "胴", desc: "両手の中点が肩より上にある量（基準との差）", lo: -0.4, hi: 0.8 },
+  gap:     { name: "両手の間", unit: "胴", desc: "両手首の距離", lo: 0, hi: 1.2 },
+  forearm: { name: "前腕の角度", unit: "度", desc: "肘→手首の向き。0=真上、90=横、180=真下", lo: 0, hi: 180 },
+  handZ:   { name: "手の前後", unit: "m", desc: "3D推定の手首が肩より前に出ている量（基準との差、+が前）", lo: -0.3, hi: 0.3 },
+};
+
+// 閾値（仮の初期値。本編のよけ判定の値を出発点にした：しゃがみ0.45、ステップ0.6）
+const TH_DEFAULT = {
+  crouch: 0.35, step: 0.5, guardUp: 0.3, guardGap: 0.8, hanmiZ: 0.15, hanmiSw: 0.25, back: 0.05, holdMs: 150,
+};
+const TH_INFO = {
+  crouch:  { name: "しゃがみ：沈み >", min: 0.1, max: 1, step: 0.01 },
+  step:    { name: "ステップ：横ずれ >", min: 0.1, max: 1.5, step: 0.01 },
+  guardUp: { name: "刀を立てる：手の高さ >", min: 0, max: 1, step: 0.01 },
+  guardGap:{ name: "刀を立てる：両手の間 <", min: 0.2, max: 1.5, step: 0.01 },
+  hanmiZ:  { name: "半身：奥行き差 >", min: 0.03, max: 0.5, step: 0.01 },
+  hanmiSw: { name: "半身：肩幅の縮み >", min: 0.05, max: 0.7, step: 0.01 },
+  back:    { name: "下がり：縮み >", min: 0.01, max: 0.2, step: 0.005 },
+  holdMs:  { name: "続いた時間 ms ≥", min: 0, max: 600, step: 10 },
+};
+let TH;
+try { TH = { ...TH_DEFAULT, ...(JSON.parse(localStorage.getItem(TH_KEY)) || {}) }; } catch { TH = { ...TH_DEFAULT }; }
+function saveTH() { try { localStorage.setItem(TH_KEY, JSON.stringify(TH)); } catch {} }
+
+// 判定（1コマ）。上から順に見て、最初に当てはまったもの
+function classify(m, th) {
+  if (m.drop > th.crouch) return "crouch";
+  if (m.shift > th.step) return "stepL";
+  if (m.shift < -th.step) return "stepR";
+  if (m.handUp > th.guardUp && m.gap < th.guardGap) return "guard";
+  if (Math.abs(m.dz) > th.hanmiZ || m.swDrop > th.hanmiSw) return m.dz >= 0 ? "hanmiR" : "hanmiL";
+  if (m.back > th.back) return "back";
+  return "chudan";
+}
+
+// ---- 骨格の生の量（基準・指標の元） ----
+const P = (lm, i) => ({ x: lm[i].x, y: lm[i].y, v: lm[i].visibility ?? 1 });
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+function raw(lm, wl) {
+  // 映像の縦横比をそろえるため、x に 幅/高さ を掛けて「高さ=1」の単位にする
+  const ar = (video.videoWidth || 1) / (video.videoHeight || 1);
+  const Q = (i) => { const p = P(lm, i); return { x: p.x * ar, y: p.y, v: p.v }; };
+  const ls = Q(11), rs = Q(12), lh = Q(23), rh = Q(24), lw = Q(15), rw = Q(16), le = Q(13), re = Q(14), la = Q(27), ra = Q(28);
+  if (ls.v < 0.5 || rs.v < 0.5 || lh.v < 0.4 || rh.v < 0.4) return null;
+  const sm = mid(ls, rs), hm = mid(lh, rh);
+  const T = dist(sm, hm), sw = dist(ls, rs);
+  const vl = Math.max(0.05, lw.v), vr = Math.max(0.05, rw.v);
+  const hand = { x: (lw.x * vl + rw.x * vr) / (vl + vr), y: (lw.y * vl + rw.y * vr) / (vl + vr) };
+  const leg = la.v > 0.5 && ra.v > 0.5 ? dist(hm, mid(la, ra)) : null;
+  const fa = (e, w) => { const a = Math.atan2(w.x - e.x, -(w.y - e.y)) * 180 / Math.PI; return Math.abs(a); }; // 0=上 180=下
+  const forearm = (fa(le, lw) + fa(re, rw)) / 2;
+  let dz = null, handZ = null;
+  if (wl) {
+    dz = wl[12].z - wl[11].z;
+    handZ = ((wl[11].z + wl[12].z) / 2) - ((wl[15].z * vl + wl[16].z * vr) / (vl + vr)); // +が前（カメラ側）
+  }
+  return {
+    smx: sm.x, smy: sm.y, T, sw, leg, tilt: Math.atan2(ls.y - rs.y, ls.x - rs.x) * 180 / Math.PI, // 正面を向けば0度付近（左肩は元の映像の右側）
+    handUp: (sm.y - hand.y) / T, gap: dist(lw, rw) / T, forearm, dz, handZ,
+  };
+}
+// 基準（calib）と位置の基準（anchor）からの差を指標にする
+function metrics(r, cal, anc) {
+  const backT = 1 - r.T / anc.T;
+  const backLeg = r.leg && anc.leg ? 1 - r.leg / anc.leg : null;
+  return {
+    shift: (r.smx - anc.smx) / cal.T,
+    drop: (r.smy - anc.smy) / cal.T,
+    back: backLeg == null ? backT : (backT + backLeg) / 2,
+    swDrop: 1 - (r.sw / r.T) / (cal.sw / cal.T),
+    dz: r.dz == null || cal.dz == null ? 0 : r.dz - cal.dz,
+    tilt: ((r.tilt - cal.tilt + 540) % 360) - 180,
+    handUp: r.handUp - cal.handUp,
+    gap: r.gap,
+    forearm: r.forearm,
+    handZ: r.handZ == null || cal.handZ == null ? 0 : r.handZ - cal.handZ,
+  };
+}
+
+// ---- 基準（キャリブレーション） ----
+let CAL = null;
+try { CAL = JSON.parse(localStorage.getItem(CAL_KEY)); } catch {}
+let anchor = CAL ? { ...CAL } : null;     // 位置の基準。計測中は試行ごとに取り直す
+const recentRaw = [];                      // 直近の生の量 { t, r }
+let liveM = null, liveCls = null, smooth = null;
+const hist = [];                           // 直近3秒の指標 { t, m }
+let capture = null;                        // 計測中に frames をためる先 { frames: [] }
+
+function onPose(lm, wl, t) {
+  if (!lm) { liveM = null; liveCls = null; $("big").textContent = CAL ? "体が見えない" : ""; return; }
+  const r = raw(lm, wl);
+  if (!r) { $("big").textContent = "肩・腰が見えない"; return; }
+  recentRaw.push({ t, r }); while (recentRaw.length && t - recentRaw[0].t > 3500) recentRaw.shift();
+  if (!CAL || !anchor) { $("big").textContent = ""; return; }
+  const m0 = metrics(r, CAL, anchor);
+  // 軽くならす（ガタつき対策。遅れは1〜2コマ）
+  smooth = smooth ? Object.fromEntries(FIELDS.map((k) => [k, smooth[k] * 0.5 + m0[k] * 0.5])) : m0;
+  liveM = smooth;
+  liveCls = classify(liveM, TH);
+  hist.push({ t, m: liveM }); while (hist.length && t - hist[0].t > 3000) hist.shift();
+  if (capture) capture.frames.push([Math.round(t), ...FIELDS.map((k) => +liveM[k].toFixed(k === "tilt" || k === "forearm" ? 1 : 3))]);
+  const c = CLASSES[liveCls];
+  $("big").textContent = c.name; $("big").style.color = c.color;
+}
+
+// 生の量の平均（t0〜t1）
+function avgRaw(t0, t1) {
+  const xs = recentRaw.filter((x) => x.t >= t0 && x.t <= t1).map((x) => x.r);
+  if (xs.length < 3) return null;
+  const keys = ["smx", "smy", "T", "sw", "tilt", "handUp", "gap", "forearm"];
+  const o = {};
+  for (const k of keys) o[k] = xs.reduce((s, x) => s + x[k], 0) / xs.length;
+  for (const k of ["leg", "dz", "handZ"]) { const v = xs.filter((x) => x[k] != null); o[k] = v.length ? v.reduce((s, x) => s + x[k], 0) / v.length : null; }
+  o.n = xs.length;
+  o.sdX = Math.sqrt(xs.reduce((s, x) => s + (x.smx - o.smx) ** 2, 0) / xs.length) / o.T;
+  return o;
+}
+
+async function calibrate() {
+  unlockAudio();
+  if (!running) { alert("先にカメラを開始してください"); return; }
+  if (busy) return; busy = true; setBusy(true);
+  try {
+    await say("中段に構えて、止まってください");
+    await sleep(2500);
+    for (const f of [600, 600, 600]) { beep(f, 100); await sleep(700); }
+    beep(1200, 200);
+    const t0 = now(); $("cue").textContent = "静止";
+    await sleep(3000);
+    $("cue").textContent = "";
+    const c = avgRaw(t0, now());
+    if (!c) { await say("体が見えませんでした。もう一度お願いします"); return; }
+    if (c.sdX > 0.05) { await say("動いていました。もう一度お願いします"); logEvent("calib_moving", { sdX: c.sdX }); return; }
+    CAL = { ...c, at: iso(), sessionId: session?.id };
+    anchor = { ...CAL }; smooth = null;
+    try { localStorage.setItem(CAL_KEY, JSON.stringify(CAL)); } catch {}
+    LOG.calibrations.push(CAL); logEvent("calibrate", { n: c.n }); saveLogSoon();
+    beep(1500, 150);
+    await say("基準を記録しました");
+  } finally { busy = false; setBusy(false); showCalib(); }
+}
+function showCalib() {
+  $("calib-state").textContent = CAL ? `基準あり（${new Date(CAL.at).toLocaleTimeString()}、${CAL.n}コマ）` : "基準なし";
+}
+showCalib();
+$("btn-calib").onclick = calibrate;
+
+// ---- 指標の表示（数値＋直近3秒のグラフ） ----
+const metEl = $("met"), metRows = {};
+for (const k of FIELDS) {
+  const i = METRIC_INFO[k];
+  const a = document.createElement("div"); a.textContent = i.name; a.title = i.desc;
+  const b = document.createElement("div"); b.style.textAlign = "right"; b.style.fontFamily = "ui-monospace, Menlo, monospace";
+  const c = document.createElement("canvas"); c.width = 300; c.height = 44;
+  metEl.append(a, b, c); metRows[k] = { val: b, cv: c };
+}
+const TH_LINES = { // グラフに引く閾値の線
+  shift: () => [TH.step, -TH.step], drop: () => [TH.crouch], back: () => [TH.back], swDrop: () => [TH.hanmiSw],
+  dz: () => [TH.hanmiZ, -TH.hanmiZ], handUp: () => [TH.guardUp], gap: () => [TH.guardGap],
+};
+function drawMetrics() {
+  requestAnimationFrame(drawMetrics);
+  if ($("p-A").hidden) return;
+  const tN = now();
+  for (const k of FIELDS) {
+    const { val, cv: c } = metRows[k], g = c.getContext("2d"), i = METRIC_INFO[k];
+    val.textContent = liveM ? (k === "tilt" || k === "forearm" ? liveM[k].toFixed(0) : liveM[k].toFixed(2)) + i.unit : "—";
+    g.clearRect(0, 0, c.width, c.height);
+    const Y = (v) => c.height - ((v - i.lo) / (i.hi - i.lo)) * c.height;
+    g.strokeStyle = "#333"; g.beginPath(); g.moveTo(0, Y(0)); g.lineTo(c.width, Y(0)); g.stroke();
+    if (TH_LINES[k]) { g.strokeStyle = "#a33"; for (const v of TH_LINES[k]()) { g.beginPath(); g.moveTo(0, Y(v)); g.lineTo(c.width, Y(v)); g.stroke(); } }
+    g.strokeStyle = "#f2c14e"; g.lineWidth = 2; g.beginPath();
+    hist.forEach((h, j) => { const x = c.width - ((tN - h.t) / 3000) * c.width, y = Math.max(0, Math.min(c.height, Y(h.m[k]))); j ? g.lineTo(x, y) : g.moveTo(x, y); });
+    g.stroke();
+  }
+}
+requestAnimationFrame(drawMetrics);
+
+// ---- 閾値のスライダー ----
+function buildTH() {
+  const el = $("th"); el.innerHTML = "";
+  for (const k of Object.keys(TH_INFO)) {
+    const i = TH_INFO[k];
+    const a = document.createElement("div"); a.textContent = i.name;
+    const s = document.createElement("input"); s.type = "range"; s.min = i.min; s.max = i.max; s.step = i.step; s.value = TH[k];
+    const v = document.createElement("div"); v.textContent = TH[k]; v.style.textAlign = "right";
+    s.oninput = () => { TH[k] = +s.value; v.textContent = s.value; saveTH(); };
+    s.onchange = () => logEvent("threshold", { key: k, value: TH[k] });
+    el.append(a, s, v);
+  }
+}
+buildTH();
+$("btn-th-reset").onclick = () => { TH = { ...TH_DEFAULT }; saveTH(); buildTH(); logEvent("threshold_reset"); };
+
+// ---- 計測のラベル選び ----
+const chipEl = $("label-chips");
+for (const id of CLASS_IDS) {
+  const l = document.createElement("label");
+  l.innerHTML = `<input type="checkbox" value="${id}" checked> ${CLASSES[id].name}`;
+  chipEl.append(l);
+}
+const backEl = $("back-chips");
+for (const cm of BACK_CM) {
+  const l = document.createElement("label");
+  l.innerHTML = `<input type="checkbox" value="${cm}" checked> ${cm}cm`;
+  backEl.append(l);
+}
+$("sel-run").onchange = () => { const b = $("sel-run").value === "back"; chipEl.hidden = b; backEl.hidden = !b; };
+
+// ---- 計測（ハンズフリー） ----
+let busy = false, stopReq = false;
+function setBusy(b) {
+  $("btn-run").disabled = b; $("btn-calib").disabled = b; $("btn-stop").disabled = !b;
+}
+$("btn-stop").onclick = () => { stopReq = true; speechSynthesis?.cancel(); };
+
+function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+
+// 記録したコマ列から、窓の中の判定を出す（閾値を変えて再判定するときもこれ）
+function judgeFrames(frames, winStart, winEnd, th) {
+  let cur = null, since = 0, first = null;
+  const peak = {};
+  for (const f of frames) {
+    const t = f[0]; if (t < winStart || t > winEnd) continue;
+    const m = Object.fromEntries(FIELDS.map((k, i) => [k, f[i + 1]]));
+    for (const k of FIELDS) { if (peak[k] == null || Math.abs(m[k]) > Math.abs(peak[k])) peak[k] = m[k]; }
+    const c = classify(m, th);
+    if (c !== cur) { cur = c; since = t; }
+    if (!first && c !== "chudan" && t - since >= th.holdMs) first = { cls: c, onset: since };
+  }
+  return { pred: first ? first.cls : "chudan", onsetMs: first ? Math.round(first.onset - winStart) : null, peak };
+}
+
+async function runMeasure() {
+  unlockAudio();
+  if (!running) { alert("先にカメラを開始してください"); return; }
+  if (!CAL) { alert("先に「基準を取る」をしてください"); return; }
+  if (busy) return;
+  const kind = $("sel-run").value, rep = Math.max(1, +$("num-rep").value || 1), win = +$("num-win").value || 2500;
+  let items;
+  if (kind === "label") {
+    const ids = [...chipEl.querySelectorAll("input:checked")].map((x) => x.value);
+    if (!ids.length) { alert("ラベルを1つ以上選んでください"); return; }
+    items = shuffle(ids.flatMap((id) => Array(rep).fill(0).map(() => ({ label: id }))));
+  } else {
+    const cms = [...backEl.querySelectorAll("input:checked")].map((x) => +x.value);
+    if (!cms.length) { alert("距離を1つ以上選んでください"); return; }
+    items = shuffle(cms.flatMap((cm) => Array(rep).fill(0).map(() => ({ label: "back", backCm: cm }))));
+  }
+  busy = true; stopReq = false; setBusy(true);
+  const run = { id: (LOG.runs.at(-1)?.id || 0) + 1, kind, startAt: iso(), n: items.length, windowMs: win, sessionId: session?.id, calAt: CAL.at };
+  LOG.runs.push(run); logEvent("run_start", { runId: run.id, kind, n: items.length });
+  try {
+    await say(`計測を始めます。全部で${items.length}回です`);
+    await sleep(800);
+    for (let i = 0; i < items.length && !stopReq; i++) {
+      const it = items[i];
+      // 1) 構えに戻る。戻ったところで位置の基準を取り直す
+      $("cue").textContent = "構え";
+      if (kind === "back") await say(i === 0 ? "中段に構えて" : "元の位置に戻って、構えて");
+      else await say("構えて");
+      await sleep(kind === "back" ? 3500 : 2000);
+      const a = avgRaw(now() - 500, now());
+      if (!a) { await say("体が見えません。この回は飛ばします"); logEvent("trial_skip", { runId: run.id, i }); continue; }
+      anchor = { ...a }; smooth = null;
+      if (stopReq) break;
+      // 2) 指示。読み上げが始まった時刻から窓を数える
+      capture = { frames: [] };
+      const preStart = now();
+      beep(1000, 80);
+      const text = kind === "back" ? `下がる、${it.backCm}センチ` : CLASSES[it.label].say;
+      $("cue").textContent = kind === "back" ? `下がる ${it.backCm}cm` : CLASSES[it.label].name;
+      const sayT = await say(text);
+      const rest = win - (now() - sayT);
+      if (rest > 0) await sleep(rest);
+      const winEnd = now();
+      const frames = capture.frames; capture = null;
+      $("cue").textContent = "";
+      // 3) 判定と記録
+      const j = judgeFrames(frames, sayT, winEnd, TH);
+      const correct = j.pred === it.label;
+      const fpsNow = shown.poseFps;
+      const trial = {
+        id: (LOG.trials.at(-1)?.id || 0) + 1, kind: "labA", runId: run.id, i,
+        label: it.label, backCm: it.backCm ?? null,
+        t: Math.round(preStart), at: iso(preStart), sayT: Math.round(sayT), windowMs: win, winEnd: Math.round(winEnd),
+        pred: j.pred, onsetMs: j.onsetMs, correct, detectedBack: kind === "back" ? j.pred === "back" : undefined,
+        peak: j.peak, fps: fpsNow, inferMs: shown.inferMs, thresholds: { ...TH },
+        anchor: { T: +a.T.toFixed(4), smx: +a.smx.toFixed(4), smy: +a.smy.toFixed(4) },
+        fields: FIELDS, frames,
+      };
+      LOG.trials.push(trial); saveLogSoon();
+      if ($("sel-fb").value === "1") { if (correct) { beep(1300, 90); setTimeout(() => beep(1700, 120), 110); } else beep(250, 300); }
+      await sleep(400);
+    }
+    if (!stopReq) { beep(800, 120); await say("計測を終わります"); }
+  } finally {
+    capture = null; busy = false; setBusy(false); $("cue").textContent = "";
+    run.endAt = iso(); logEvent("run_end", { runId: run.id, stopped: stopReq });
+    anchor = { ...CAL }; smooth = null;
+    saveLogNow();
+    showResult();
+    document.querySelector("details:last-of-type").open = true;
+  }
+}
+$("btn-run").onclick = runMeasure;
+
+// ---- 結果 ----
+function scopeTrials() {
+  const ts = LOG.trials.filter((t) => t.kind === "labA");
+  if ($("sel-scope").value === "all") return ts;
+  const last = LOG.runs.filter((r) => ts.some((t) => t.runId === r.id)).at(-1);
+  return last ? ts.filter((t) => t.runId === last.id) : [];
+}
+function rejudge(ts) {
+  return ts.map((t) => { const j = judgeFrames(t.frames, t.sayT, t.winEnd, TH); return { ...t, pred: j.pred, onsetMs: j.onsetMs, peak: j.peak, correct: j.pred === t.label }; });
+}
+const med = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+function analyzeA(ts) {
+  const lab = ts.filter((t) => t.backCm == null), bk = ts.filter((t) => t.backCm != null);
+  const per = {}, conf = {};
+  for (const t of lab) {
+    per[t.label] ||= { n: 0, ok: 0, onset: [] }; per[t.label].n++; if (t.correct) per[t.label].ok++;
+    if (t.onsetMs != null && t.correct) per[t.label].onset.push(t.onsetMs);
+    conf[t.label] ||= {}; conf[t.label][t.pred] = (conf[t.label][t.pred] || 0) + 1;
+  }
+  const mistakes = [];
+  for (const a in conf) for (const b in conf[a]) if (a !== b) mistakes.push({ label: a, pred: b, n: conf[a][b] });
+  mistakes.sort((x, y) => y.n - x.n);
+  const backBy = {};
+  for (const t of bk) {
+    backBy[t.backCm] ||= { n: 0, det: 0, peaks: [], onset: [] };
+    const b = backBy[t.backCm]; b.n++; if (t.pred === "back") { b.det++; if (t.onsetMs != null) b.onset.push(t.onsetMs); }
+    b.peaks.push(t.peak?.back ?? 0);
+  }
+  const ok = lab.filter((t) => t.correct).length;
+  return { nLab: lab.length, ok, per, conf, mistakes, backBy };
+}
+function showResult() {
+  const ts = rejudge(scopeTrials());
+  const r = analyzeA(ts), el = $("result");
+  if (!ts.length) { el.innerHTML = '<div class="mut">まだ試行がありません</div>'; return; }
+  let h = "";
+  if (r.nLab) {
+    h += `<p>ラベル判定 ${r.nLab}回　正解 ${r.ok}（${Math.round((100 * r.ok) / r.nLab)}%）</p>`;
+    h += "<table><tr><th>ラベル</th><th>回</th><th>正解率</th><th>反応 中央ms</th></tr>";
+    for (const id of CLASS_IDS) { const p = r.per[id]; if (!p) continue; h += `<tr><th>${CLASSES[id].name}</th><td>${p.n}</td><td>${Math.round((100 * p.ok) / p.n)}%</td><td>${med(p.onset) ?? "—"}</td></tr>`; }
+    h += "</table><p class='mut'>反応 = 読み上げ開始から判定が出るまで</p>";
+    const used = CLASS_IDS.filter((id) => r.conf[id] || Object.values(r.conf).some((c) => c[id]));
+    h += "<p>混同行列（行＝指示、列＝判定）</p><div style='overflow:auto'><table><tr><th></th>" + used.map((id) => `<th>${CLASSES[id].name}</th>`).join("") + "</tr>";
+    for (const a of used) {
+      if (!r.conf[a]) continue;
+      h += `<tr><th>${CLASSES[a].name}</th>` + used.map((b) => { const n = r.conf[a][b] || 0; return `<td class="${n ? (a === b ? "diag" : "bad") : ""}">${n || ""}</td>`; }).join("") + "</tr>";
+    }
+    h += "</table></div>";
+    if (r.mistakes.length) h += "<p>多い取り違え</p><ul>" + r.mistakes.slice(0, 6).map((m) => `<li>${CLASSES[m.label].name} → ${CLASSES[m.pred].name}：${m.n}回</li>`).join("") + "</ul>";
+  }
+  const cms = Object.keys(r.backBy).map(Number).sort((a, b) => a - b);
+  if (cms.length) {
+    h += "<p>下がりの距離</p><table><tr><th>距離</th><th>回</th><th>検知率</th><th>縮み 中央</th><th>最小〜最大</th><th>反応 中央ms</th></tr>";
+    for (const cm of cms) {
+      const b = r.backBy[cm], p = b.peaks;
+      h += `<tr><th>${cm}cm</th><td>${b.n}</td><td>${Math.round((100 * b.det) / b.n)}%</td><td>${med(p).toFixed(3)}</td><td>${Math.min(...p).toFixed(3)}〜${Math.max(...p).toFixed(3)}</td><td>${med(b.onset) ?? "—"}</td></tr>`;
+    }
+    h += "</table>";
+  }
+  h += "<p class='mut'>今の閾値で再判定した結果です（記録したときの閾値は試行ごとにログに残っています）。</p>";
+  el.innerHTML = h;
+}
+$("btn-result").onclick = showResult;
+$("sel-scope").onchange = showResult;
 
 // ---------- メニュー ----------
 document.querySelectorAll("nav button").forEach((b) => b.onclick = () => {
@@ -311,7 +771,7 @@ document.querySelectorAll("nav button").forEach((b) => b.onclick = () => {
   logEvent("mode", { mode: b.dataset.mode });
 });
 
-// ---------- ラボC（段階1の最小版：要約・JSON保存） ----------
+// ---------- ラボC（要約・JSON保存） ----------
 function stats(arr) {
   if (!arr.length) return null;
   const s = [...arr].sort((a, b) => a - b), q = (p) => s[Math.min(s.length - 1, Math.floor(p * s.length))];
@@ -330,7 +790,32 @@ function refreshSummary() {
       pf ? `骨格FPS 中央${pf.med}（10%点 ${pf.p10} / 90%点 ${pf.p90}）  カメラ実FPS 中央${cf.med}  推論 中央${im.med}ms（90%点 ${im.p90}ms）  計${pf.n}秒` : "計測なし",
     );
   }
-  lines.push(`試行 ${LOG.trials.length} 件（段階2以降）`);
+  // ラボA（Q1〜Q3）。今の閾値で再判定した値
+  const ts = rejudge(LOG.trials.filter((t) => t.kind === "labA"));
+  if (ts.length) {
+    const r = analyzeA(ts);
+    lines.push("## ラボA（今の閾値で再判定）", `閾値 ${JSON.stringify(TH)}`);
+    if (r.nLab) {
+      lines.push(`ラベル判定 ${r.nLab}回 正解${r.ok}（${Math.round((100 * r.ok) / r.nLab)}%）`);
+      for (const id of CLASS_IDS) { const p = r.per[id]; if (p) lines.push(`- ${CLASSES[id].name}: ${p.ok}/${p.n}（${Math.round((100 * p.ok) / p.n)}%） 反応中央${med(p.onset) ?? "-"}ms 判定内訳 ${Object.entries(r.conf[id]).map(([k, n]) => `${CLASSES[k].name}${n}`).join(" ")}`); }
+      const pair = (a, b) => (r.conf[a]?.[b] || 0);
+      lines.push(`Q2 中段→刀を立てる ${pair("chudan", "guard")}回 / 刀を立てる→中段 ${pair("guard", "chudan")}回`);
+      lines.push(`Q1 半身→ステップ ${pair("hanmiR", "stepR") + pair("hanmiR", "stepL") + pair("hanmiL", "stepR") + pair("hanmiL", "stepL")}回 / ステップ→半身 ${pair("stepR", "hanmiR") + pair("stepR", "hanmiL") + pair("stepL", "hanmiR") + pair("stepL", "hanmiL")}回 / 半身の左右逆 ${pair("hanmiR", "hanmiL") + pair("hanmiL", "hanmiR")}回`);
+      // 半身の指標の大きさ（閾値を決める材料）
+      for (const id of ["hanmiR", "hanmiL", "guard", "chudan"]) {
+        const xs = ts.filter((t) => t.label === id && t.backCm == null);
+        if (xs.length) lines.push(`  ${CLASSES[id].name}のピーク中央: 奥行き差${med(xs.map((t) => t.peak.dz ?? 0))?.toFixed(3)}m 肩幅の縮み${med(xs.map((t) => t.peak.swDrop ?? 0))?.toFixed(3)} 手の高さ${med(xs.map((t) => t.peak.handUp ?? 0))?.toFixed(2)} 前腕${med(xs.map((t) => t.peak.forearm ?? 0))?.toFixed(0)}度 横ずれ${med(xs.map((t) => t.peak.shift ?? 0))?.toFixed(2)}`);
+      }
+    }
+    const cms = Object.keys(r.backBy).map(Number).sort((a, b) => a - b);
+    if (cms.length) {
+      lines.push("Q3 下がり（距離: 検知率 / 縮みの中央・最小〜最大 / 反応中央）");
+      for (const cm of cms) { const b = r.backBy[cm]; lines.push(`- ${cm}cm: ${b.det}/${b.n} / ${med(b.peaks).toFixed(3)}・${Math.min(...b.peaks).toFixed(3)}〜${Math.max(...b.peaks).toFixed(3)} / ${med(b.onset) ?? "-"}ms`); }
+      const ok = cms.filter((cm) => r.backBy[cm].det / r.backBy[cm].n >= 0.8);
+      lines.push(`検知率80%以上の最小の後退: ${ok.length ? ok[0] + "cm" : "なし"}`);
+    }
+  }
+  lines.push(`試行 合計${LOG.trials.length}件`);
   $("summary").value = lines.join("\n");
 }
 $("btn-refresh").onclick = refreshSummary;
@@ -345,16 +830,15 @@ function download(name, text, type) {
   a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
-$("btn-dl-json").onclick = () => download(`dodgelab_${Date.now()}.json`, JSON.stringify(LOG, null, 1), "application/json");
+$("btn-dl-json").onclick = () => download(`dodgelab_${Date.now()}.json`, JSON.stringify(LOG), "application/json");
 $("btn-clear").onclick = () => {
-  if (!confirm("このブラウザに残っているラボのログを消します。よろしいですか？")) return;
+  if (!confirm("このブラウザに残っているラボのログを消します（基準と閾値は残します）。よろしいですか？")) return;
   LOG = newLog(); try { localStorage.removeItem(LOG_KEY); } catch {}
   logEvent("log_cleared"); refreshSummary();
 };
 
-// 裏に回ったら記録だけ残す
 document.addEventListener("visibilitychange", () => logEvent(document.hidden ? "hidden" : "visible"));
-window.__lab = { get LOG() { return LOG; } }; // 確認用
+window.__lab = { get LOG() { return LOG; }, classify, judgeFrames, get TH() { return TH; }, onPose }; // 確認用
 </script>
 </body>
 </html>

@@ -569,6 +569,8 @@ function saveTH() { try { localStorage.setItem(TH_KEY, JSON.stringify(TH)); } ca
 
 // 判定（1コマ）。上から順に見て、最初に当てはまったもの
 function classify(m, th) {
+  // 素振りの間は回避を数えない（段階4の試し。th.swingMask が無ければ何もしない）
+  if (th.swingMask && (m.hspd ?? 0) > th.swingMask) return "chudan";
   if (m.drop > th.crouch) return "crouch";
   // ステップは腰の横ずれで見る（v4）。腰の横ずれを記録していない古い試行は、肩の横ずれで見る
   const sx = m.hipShift ?? m.shift;
@@ -1397,9 +1399,15 @@ const leadBin = (ms) => { const b = LEAD_BINS.find(([a, z]) => ms >= a && ms < z
 const telKey = (t) => { const s = [t.tel?.mark && "！", t.tel?.ring && "輪", t.tel?.sound && "音"].filter(Boolean).join("+"); return s ? `${s} ${leadBin(t.lead)}` : "予告なし"; };
 const spName = (k) => ({ slow: "遅", mid: "中", fast: "速" })[k] || k;
 const pct = (a, b) => (b ? Math.round((100 * a) / b) + "%" : "-");
-function rejudgeB(ts) {
+function rejudgeB(ts, th = TH) {
   const table = bTable();
-  return ts.map((t) => ({ ...t, ...judgeAttack(t, TH, table, t.windowPre, t.windowPost), table: table[t.type] || [] }));
+  return ts.map((t) => {
+    const j = judgeAttack(t, th, table, t.windowPre, t.windowPost);
+    // 連撃の2本目以降：記録の区切りの頭からすでに続いていた動き＝前の1本からの同じ動きのまま（しゃがんだまま等）
+    //   （段階4の初版は、区切りで切れた動きを「新しい動き」と数えていて、同じ動きのままを0%と出していた）
+    const sameMove = t.comboIndex > 0 && j.dodge ? (j.dodge.onset ?? j.dodge.start) <= t.anchorT + 60 : t.comboIndex > 0 ? false : undefined;
+    return { ...t, ...j, sameMove, table: table[t.type] || [] };
+  });
 }
 function analyzeB(ts) {
   const by = (keyf) => {
@@ -1493,12 +1501,36 @@ function summaryQ6(ts, lines) {
     for (const t of idle) for (const s of t.falsePos) cnt[s.cls] = (cnt[s.cls] || 0) + 1;
     const n = idle.reduce((s, t) => s + t.falsePos.length, 0);
     lines.push(`攻撃なし（誤検知）: ${min.toFixed(1)}分で${n}回＝1分あたり${(n / Math.max(0.01, min)).toFixed(1)}回（${Object.entries(cnt).map(([c, k]) => `${CLASSES[c].name}${k}`).join(" ") || "なし"}）`);
+    // 本番で効くのは「攻撃の窓（約1.15秒）の中にたまたま誤検知が入る確率」
+    const win = 1.15, rate = n / Math.max(0.01, min) / 60;
+    lines.push(`  → 窓${win}秒の中に誤検知が入る見込み ${Math.round(100 * (1 - Math.exp(-rate * win)))}%`);
+  }
+  swingMaskCompare(lines);
+}
+// 素振りの間（手の速さ > 素振りありの閾値）は回避を数えない、とした場合の比較（記録済みのデータを判定し直すだけ）
+function swingMaskCompare(lines) {
+  const thM = { ...TH, swingMask: TH.swing };
+  const atk = LOG.trials.filter((t) => t.kind === "labB" && (t.fields || []).includes("hspd"));
+  const idle = LOG.trials.filter((t) => t.kind === "labB-idle");
+  if (!atk.length && !idle.length) return;
+  lines.push(`素振りの間は数えない（手の速さ>${TH.swing}）とした場合 ※手の速さを記録した試行だけで比べる`);
+  if (atk.length) {
+    const a0 = rejudgeB(atk), a1 = rejudgeB(atk, thM);
+    const s = (xs, k) => pct(xs.filter((t) => t[k]).length, xs.length);
+    lines.push(`- 攻撃${atk.length}本: 成功1 ${s(a0, "success1")}→${s(a1, "success1")} 成功2 ${s(a0, "success2")}→${s(a1, "success2")}`);
+    const c0 = a0.filter((t) => t.counterCheck), c1 = a1.filter((t) => t.counterCheck);
+    if (c0.length) lines.push(`- 反撃の素振り中の誤検知: ${pct(c0.filter((t) => t.counterCheck.falsePos.length).length, c0.length)}→${pct(c1.filter((t) => t.counterCheck.falsePos.length).length, c1.length)}`);
+  }
+  if (idle.length) {
+    const min = idle.reduce((s, t) => s + t.durationMs, 0) / 60000;
+    const n0 = idle.reduce((s, t) => s + rejudgeIdle(t).length, 0), n1 = idle.reduce((s, t) => s + rejudgeIdle(t, thM).length, 0);
+    lines.push(`- 攻撃なし: 1分あたり${(n0 / min).toFixed(1)}回→${(n1 / min).toFixed(1)}回`);
   }
 }
 // 攻撃なしの記録を、今の閾値で拾い直す（基準を取り直した区切りごと）
-function rejudgeIdle(t) {
+function rejudgeIdle(t, th = TH) {
   const cuts = [t.anchorT, ...(t.anchors || []), t.capEnd], segs = [];
-  for (let k = 0; k + 1 < cuts.length; k++) segs.push(...segmentsOf(t.frames, t.fields, cuts[k], cuts[k + 1], TH));
+  for (let k = 0; k + 1 < cuts.length; k++) segs.push(...segmentsOf(t.frames, t.fields, cuts[k], cuts[k + 1], th));
   return segs;
 }
 

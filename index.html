@@ -133,7 +133,7 @@ const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
   full: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
 };
-const LOG_KEY = "dodgelab.log.v1", TH_KEY = "dodgelab.th.v1", CAL_KEY = "dodgelab.cal.v1";
+const LOG_KEY = "dodgelab.log.v1", TH_KEY = "dodgelab.th.v2", CAL_KEY = "dodgelab.cal.v2"; // 指標を足したので基準は取り直し
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ---------- ログ ----------
@@ -194,6 +194,22 @@ function pickVoice() {
   jaVoice = vs.find((v) => /ja/i.test(v.lang) && /Kyoko|O-ren|Otoya|Hattori/i.test(v.name)) || vs.find((v) => /ja/i.test(v.lang)) || null;
 }
 if (window.speechSynthesis) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+// 読み上げの開始と終わりの時刻を両方取る。{ startP, endP }（どちらも Promise<ms>）
+function speak(text) {
+  const called = now();
+  if (!window.speechSynthesis) return { startP: Promise.resolve(called), endP: Promise.resolve(called) };
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "ja-JP"; if (jaVoice) u.voice = jaVoice; u.rate = 1.15; u.volume = 1;
+  let rs, re; const startP = new Promise((r) => (rs = r)), endP = new Promise((r) => (re = r));
+  let st = null;
+  u.onstart = () => { st = now(); rs(st); };
+  u.onend = () => { rs(st ?? called); re(now()); };
+  setTimeout(() => rs(called), 600);
+  setTimeout(() => re(now()), 600 + text.length * 220); // onend が来ないとき用の目安
+  speechSynthesis.cancel(); speechSynthesis.speak(u);
+  logEvent("say", { text });
+  return { startP, endP };
+}
 // 読み上げ。読み上げが実際に始まった時刻（onstart）を返す。onstart が来なければ呼んだ時刻
 function say(text) {
   return new Promise((resolve) => {
@@ -371,6 +387,7 @@ function perfTick() {
 const CLASSES = {
   chudan: { name: "中段（何もしない）", say: "そのまま", color: "#ddd" },
   guard:  { name: "刀を立てる", say: "刀を立てる", color: "#7cc7ff" },
+  hanmiX: { name: "半身（向き未定）", say: "", color: "#f2c14e", internal: true },
   hanmiR: { name: "半身・右", say: "半身、右", color: "#f2c14e" },
   hanmiL: { name: "半身・左", say: "半身、左", color: "#f2c14e" },
   back:   { name: "下がり", say: "下がる", color: "#c58bff" },
@@ -378,11 +395,11 @@ const CLASSES = {
   stepR:  { name: "ステップ・右", say: "右へ、ステップ", color: "#5fd18a" },
   stepL:  { name: "ステップ・左", say: "左へ、ステップ", color: "#5fd18a" },
 };
-const CLASS_IDS = Object.keys(CLASSES);
+const CLASS_IDS = Object.keys(CLASSES).filter((id) => !CLASSES[id].internal);
 const BACK_CM = [10, 20, 30, 50];
 
 // 指標（1コマ分）。frames に残すのはこの順の数値の配列
-const FIELDS = ["shift", "drop", "back", "swDrop", "dz", "tilt", "handUp", "gap", "forearm", "handZ"];
+const FIELDS = ["shift", "drop", "back", "swDrop", "dz", "tilt", "handUp", "gap", "forearm", "handZ", "handDir"];
 const METRIC_INFO = {
   shift:   { name: "横ずれ", unit: "胴", desc: "肩の中点の横の動き（+が自分の左）", lo: -1, hi: 1 },
   drop:    { name: "沈み", unit: "胴", desc: "肩の中点が下がった量", lo: -0.3, hi: 0.8 },
@@ -394,11 +411,14 @@ const METRIC_INFO = {
   gap:     { name: "両手の間", unit: "胴", desc: "両手首の距離", lo: 0, hi: 1.2 },
   forearm: { name: "前腕の角度", unit: "度", desc: "肘→手首の向き。0=真上、90=横、180=真下", lo: 0, hi: 180 },
   handZ:   { name: "手の前後", unit: "m", desc: "3D推定の手首が肩より前に出ている量（基準との差、+が前）", lo: -0.3, hi: 0.3 },
+  handDir: { name: "手先の向き", unit: "度", desc: "手首→指の付け根（人差し指と小指の中点）の向き。0=真上、180=真下。刀を立てると手首の返しで変わるかを見る", lo: 0, hi: 180 },
 };
 
 // 閾値（仮の初期値。本編のよけ判定の値を出発点にした：しゃがみ0.45、ステップ0.6）
+// v2（実機1回目を見て）：刀を立てるの手の高さは中段との差が小さかった（ピーク中央 0.15 対 -0.04）ので 0.1 に。
+// ステップは窓に間に合わなかった回が多いので窓を直し、閾値も少し下げた（半身の横ずれは ±0.12 程度だった）
 const TH_DEFAULT = {
-  crouch: 0.35, step: 0.5, guardUp: 0.3, guardGap: 0.8, hanmiZ: 0.15, hanmiSw: 0.25, back: 0.05, holdMs: 150,
+  crouch: 0.35, step: 0.4, guardUp: 0.1, guardGap: 0.8, hanmiZ: 0.15, hanmiSw: 0.25, hanmiDir: 0.06, back: 0.05, holdMs: 150,
 };
 const TH_INFO = {
   crouch:  { name: "しゃがみ：沈み >", min: 0.1, max: 1, step: 0.01 },
@@ -407,6 +427,7 @@ const TH_INFO = {
   guardGap:{ name: "刀を立てる：両手の間 <", min: 0.2, max: 1.5, step: 0.01 },
   hanmiZ:  { name: "半身：奥行き差 >", min: 0.03, max: 0.5, step: 0.01 },
   hanmiSw: { name: "半身：肩幅の縮み >", min: 0.05, max: 0.7, step: 0.01 },
+  hanmiDir:{ name: "半身の向き：奥行き差 ≥", min: 0, max: 0.2, step: 0.01 },
   back:    { name: "下がり：縮み >", min: 0.01, max: 0.2, step: 0.005 },
   holdMs:  { name: "続いた時間 ms ≥", min: 0, max: 600, step: 10 },
 };
@@ -420,7 +441,8 @@ function classify(m, th) {
   if (m.shift > th.step) return "stepL";
   if (m.shift < -th.step) return "stepR";
   if (m.handUp > th.guardUp && m.gap < th.guardGap) return "guard";
-  if (Math.abs(m.dz) > th.hanmiZ || m.swDrop > th.hanmiSw) return m.dz >= 0 ? "hanmiR" : "hanmiL";
+  // 半身の向きは奥行き差の符号で決める。差が小さいうちは「向き未定」（ここで決めると左右を取り違えやすい）
+  if (Math.abs(m.dz) > th.hanmiZ || m.swDrop > th.hanmiSw) return Math.abs(m.dz) < (th.hanmiDir ?? 0) ? "hanmiX" : m.dz > 0 ? "hanmiR" : "hanmiL";
   if (m.back > th.back) return "back";
   return "chudan";
 }
@@ -442,6 +464,8 @@ function raw(lm, wl) {
   const leg = la.v > 0.5 && ra.v > 0.5 ? dist(hm, mid(la, ra)) : null;
   const fa = (e, w) => { const a = Math.atan2(w.x - e.x, -(w.y - e.y)) * 180 / Math.PI; return Math.abs(a); }; // 0=上 180=下
   const forearm = (fa(le, lw) + fa(re, rw)) / 2;
+  const tipL = mid(Q(17), Q(19)), tipR = mid(Q(18), Q(20)); // 小指と人差し指の付け根の中点
+  const handDir = (fa(lw, tipL) + fa(rw, tipR)) / 2;
   let dz = null, handZ = null;
   if (wl) {
     dz = wl[12].z - wl[11].z;
@@ -449,7 +473,7 @@ function raw(lm, wl) {
   }
   return {
     smx: sm.x, smy: sm.y, T, sw, leg, tilt: Math.atan2(ls.y - rs.y, ls.x - rs.x) * 180 / Math.PI, // 正面を向けば0度付近（左肩は元の映像の右側）
-    handUp: (sm.y - hand.y) / T, gap: dist(lw, rw) / T, forearm, dz, handZ,
+    handUp: (sm.y - hand.y) / T, gap: dist(lw, rw) / T, forearm, handDir, dz, handZ,
   };
 }
 // 基準（calib）と位置の基準（anchor）からの差を指標にする
@@ -466,6 +490,7 @@ function metrics(r, cal, anc) {
     handUp: r.handUp - cal.handUp,
     gap: r.gap,
     forearm: r.forearm,
+    handDir: r.handDir,
     handZ: r.handZ == null || cal.handZ == null ? 0 : r.handZ - cal.handZ,
   };
 }
@@ -491,7 +516,7 @@ function onPose(lm, wl, t) {
   liveM = smooth;
   liveCls = classify(liveM, TH);
   hist.push({ t, m: liveM }); while (hist.length && t - hist[0].t > 3000) hist.shift();
-  if (capture) capture.frames.push([Math.round(t), ...FIELDS.map((k) => +liveM[k].toFixed(k === "tilt" || k === "forearm" ? 1 : 3))]);
+  if (capture) capture.frames.push([Math.round(t), ...FIELDS.map((k) => +liveM[k].toFixed(k === "tilt" || k === "forearm" || k === "handDir" ? 1 : 3))]);
   const c = CLASSES[liveCls];
   $("big").textContent = c.name; $("big").style.color = c.color;
 }
@@ -551,13 +576,16 @@ const TH_LINES = { // グラフに引く閾値の線
   shift: () => [TH.step, -TH.step], drop: () => [TH.crouch], back: () => [TH.back], swDrop: () => [TH.hanmiSw],
   dz: () => [TH.hanmiZ, -TH.hanmiZ], handUp: () => [TH.guardUp], gap: () => [TH.guardGap],
 };
+let lastDraw = 0;
 function drawMetrics() {
   requestAnimationFrame(drawMetrics);
   if ($("p-A").hidden) return;
   const tN = now();
+  // グラフは1秒に8回だけ描く（毎フレーム描くと骨格推定のFPSが落ちた：実機で中央44・10%点30）
+  if (tN - lastDraw < 125) return; lastDraw = tN;
   for (const k of FIELDS) {
     const { val, cv: c } = metRows[k], g = c.getContext("2d"), i = METRIC_INFO[k];
-    val.textContent = liveM ? (k === "tilt" || k === "forearm" ? liveM[k].toFixed(0) : liveM[k].toFixed(2)) + i.unit : "—";
+    val.textContent = liveM ? (i.unit === "度" ? liveM[k].toFixed(0) : liveM[k].toFixed(2)) + i.unit : "—";
     g.clearRect(0, 0, c.width, c.height);
     const Y = (v) => c.height - ((v - i.lo) / (i.hi - i.lo)) * c.height;
     g.strokeStyle = "#333"; g.beginPath(); g.moveTo(0, Y(0)); g.lineTo(c.width, Y(0)); g.stroke();
@@ -610,18 +638,23 @@ $("btn-stop").onclick = () => { stopReq = true; speechSynthesis?.cancel(); };
 function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 
 // 記録したコマ列から、窓の中の判定を出す（閾値を変えて再判定するときもこれ）
-function judgeFrames(frames, winStart, winEnd, th) {
+// fields は記録したときの指標の並び（古い試行は指標が少ない。無い指標は 0 とみなす）
+// 半身は「向き未定」の間も続いた時間に数え、向きはその後に初めて決まった向きにする。最後まで決まらなければ奥行き差のピークの符号
+function judgeFrames(frames, fields, winStart, winEnd, th) {
   let cur = null, since = 0, first = null;
-  const peak = {};
+  const peak = {}, idx = Object.fromEntries((fields || FIELDS).map((k, i) => [k, i + 1]));
+  const grp = (c) => (c === "hanmiX" || c === "hanmiR" || c === "hanmiL" ? "hanmi" : c);
   for (const f of frames) {
     const t = f[0]; if (t < winStart || t > winEnd) continue;
-    const m = Object.fromEntries(FIELDS.map((k, i) => [k, f[i + 1]]));
+    const m = Object.fromEntries(FIELDS.map((k) => [k, idx[k] ? f[idx[k]] : 0]));
     for (const k of FIELDS) { if (peak[k] == null || Math.abs(m[k]) > Math.abs(peak[k])) peak[k] = m[k]; }
     const c = classify(m, th);
-    if (c !== cur) { cur = c; since = t; }
-    if (!first && c !== "chudan" && t - since >= th.holdMs) first = { cls: c, onset: since };
+    if (grp(c) !== cur) { cur = grp(c); since = t; }
+    if (!first && cur !== "chudan" && t - since >= th.holdMs) first = { cls: c, onset: since };
+    else if (first && first.cls === "hanmiX" && (c === "hanmiR" || c === "hanmiL")) first.cls = c;
   }
-  return { pred: first ? first.cls : "chudan", onsetMs: first ? Math.round(first.onset - winStart) : null, peak };
+  if (first && first.cls === "hanmiX") first.cls = (peak.dz ?? 0) >= 0 ? "hanmiR" : "hanmiL";
+  return { pred: first ? first.cls : "chudan", onsetMs: first ? Math.round(first.onset - winStart) : null, onsetAt: first ? first.onset : null, peak };
 }
 
 async function runMeasure() {
@@ -629,7 +662,7 @@ async function runMeasure() {
   if (!running) { alert("先にカメラを開始してください"); return; }
   if (!CAL) { alert("先に「基準を取る」をしてください"); return; }
   if (busy) return;
-  const kind = $("sel-run").value, rep = Math.max(1, +$("num-rep").value || 1), win = +$("num-win").value || 2500;
+  const kind = $("sel-run").value, rep = Math.max(1, +$("num-rep").value || 1), win = +$("num-win").value || 2000;
   let items;
   if (kind === "label") {
     const ids = [...chipEl.querySelectorAll("input:checked")].map((x) => x.value);
@@ -657,27 +690,29 @@ async function runMeasure() {
       if (!a) { await say("体が見えません。この回は飛ばします"); logEvent("trial_skip", { runId: run.id, i }); continue; }
       anchor = { ...a }; smooth = null;
       if (stopReq) break;
-      // 2) 指示。読み上げが始まった時刻から窓を数える
+      // 2) 指示。窓は「読み上げの開始」から「読み終わり＋win ms」まで
+      //   （v1 は開始から2.5秒で切っていた。読み上げ自体に約1秒かかり、ステップや半身が窓に間に合わなかった）
       capture = { frames: [] };
       const preStart = now();
       beep(1000, 80);
       const text = kind === "back" ? `下がる、${it.backCm}センチ` : CLASSES[it.label].say;
       $("cue").textContent = kind === "back" ? `下がる ${it.backCm}cm` : CLASSES[it.label].name;
-      const sayT = await say(text);
-      const rest = win - (now() - sayT);
-      if (rest > 0) await sleep(rest);
+      const sp = speak(text);
+      const sayT = await sp.startP, sayEnd = await sp.endP;
+      await sleep(win);
       const winEnd = now();
       const frames = capture.frames; capture = null;
       $("cue").textContent = "";
       // 3) 判定と記録
-      const j = judgeFrames(frames, sayT, winEnd, TH);
+      const j = judgeFrames(frames, FIELDS, sayT, winEnd, TH);
       const correct = j.pred === it.label;
       const fpsNow = shown.poseFps;
       const trial = {
         id: (LOG.trials.at(-1)?.id || 0) + 1, kind: "labA", runId: run.id, i,
         label: it.label, backCm: it.backCm ?? null,
-        t: Math.round(preStart), at: iso(preStart), sayT: Math.round(sayT), windowMs: win, winEnd: Math.round(winEnd),
-        pred: j.pred, onsetMs: j.onsetMs, correct, detectedBack: kind === "back" ? j.pred === "back" : undefined,
+        t: Math.round(preStart), at: iso(preStart), sayT: Math.round(sayT), sayEnd: Math.round(sayEnd), sayMs: Math.round(sayEnd - sayT),
+        windowMs: win, winEnd: Math.round(winEnd),
+        pred: j.pred, onsetMs: j.onsetMs, onsetFromEndMs: j.onsetAt == null ? null : Math.round(j.onsetAt - sayEnd), correct, detectedBack: kind === "back" ? j.pred === "back" : undefined,
         peak: j.peak, fps: fpsNow, inferMs: shown.inferMs, thresholds: { ...TH },
         anchor: { T: +a.T.toFixed(4), smx: +a.smx.toFixed(4), smy: +a.smy.toFixed(4) },
         fields: FIELDS, frames,
@@ -706,15 +741,20 @@ function scopeTrials() {
   return last ? ts.filter((t) => t.runId === last.id) : [];
 }
 function rejudge(ts) {
-  return ts.map((t) => { const j = judgeFrames(t.frames, t.sayT, t.winEnd, TH); return { ...t, pred: j.pred, onsetMs: j.onsetMs, peak: j.peak, correct: j.pred === t.label }; });
+  return ts.map((t) => {
+    const j = judgeFrames(t.frames, t.fields, t.sayT, t.winEnd, TH);
+    return { ...t, pred: j.pred, onsetMs: j.onsetMs, onsetFromEndMs: j.onsetAt != null && t.sayEnd ? Math.round(j.onsetAt - t.sayEnd) : null, peak: j.peak, correct: j.pred === t.label };
+  });
 }
 const med = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
 function analyzeA(ts) {
   const lab = ts.filter((t) => t.backCm == null), bk = ts.filter((t) => t.backCm != null);
   const per = {}, conf = {};
   for (const t of lab) {
-    per[t.label] ||= { n: 0, ok: 0, onset: [] }; per[t.label].n++; if (t.correct) per[t.label].ok++;
+    per[t.label] ||= { n: 0, ok: 0, onset: [], onsetEnd: [], sayMs: [] }; per[t.label].n++; if (t.correct) per[t.label].ok++;
     if (t.onsetMs != null && t.correct) per[t.label].onset.push(t.onsetMs);
+    if (t.onsetFromEndMs != null && t.correct) per[t.label].onsetEnd.push(t.onsetFromEndMs);
+    if (t.sayMs != null) per[t.label].sayMs.push(t.sayMs);
     conf[t.label] ||= {}; conf[t.label][t.pred] = (conf[t.label][t.pred] || 0) + 1;
   }
   const mistakes = [];
@@ -736,9 +776,9 @@ function showResult() {
   let h = "";
   if (r.nLab) {
     h += `<p>ラベル判定 ${r.nLab}回　正解 ${r.ok}（${Math.round((100 * r.ok) / r.nLab)}%）</p>`;
-    h += "<table><tr><th>ラベル</th><th>回</th><th>正解率</th><th>反応 中央ms</th></tr>";
-    for (const id of CLASS_IDS) { const p = r.per[id]; if (!p) continue; h += `<tr><th>${CLASSES[id].name}</th><td>${p.n}</td><td>${Math.round((100 * p.ok) / p.n)}%</td><td>${med(p.onset) ?? "—"}</td></tr>`; }
-    h += "</table><p class='mut'>反応 = 読み上げ開始から判定が出るまで</p>";
+    h += "<table><tr><th>ラベル</th><th>回</th><th>正解率</th><th>反応 開始から</th><th>読み終わりから</th></tr>";
+    for (const id of CLASS_IDS) { const p = r.per[id]; if (!p) continue; h += `<tr><th>${CLASSES[id].name}</th><td>${p.n}</td><td>${Math.round((100 * p.ok) / p.n)}%</td><td>${med(p.onset) ?? "—"}</td><td>${med(p.onsetEnd) ?? "—"}</td></tr>`; }
+    h += "</table><p class='mut'>反応 = 読み上げの開始（または読み終わり）から判定が出るまでの中央値 ms。マイナスは読み終わる前に動いた</p>";
     const used = CLASS_IDS.filter((id) => r.conf[id] || Object.values(r.conf).some((c) => c[id]));
     h += "<p>混同行列（行＝指示、列＝判定）</p><div style='overflow:auto'><table><tr><th></th>" + used.map((id) => `<th>${CLASSES[id].name}</th>`).join("") + "</tr>";
     for (const a of used) {
@@ -797,14 +837,27 @@ function refreshSummary() {
     lines.push("## ラボA（今の閾値で再判定）", `閾値 ${JSON.stringify(TH)}`);
     if (r.nLab) {
       lines.push(`ラベル判定 ${r.nLab}回 正解${r.ok}（${Math.round((100 * r.ok) / r.nLab)}%）`);
-      for (const id of CLASS_IDS) { const p = r.per[id]; if (p) lines.push(`- ${CLASSES[id].name}: ${p.ok}/${p.n}（${Math.round((100 * p.ok) / p.n)}%） 反応中央${med(p.onset) ?? "-"}ms 判定内訳 ${Object.entries(r.conf[id]).map(([k, n]) => `${CLASSES[k].name}${n}`).join(" ")}`); }
+      for (const id of CLASS_IDS) { const p = r.per[id]; if (p) lines.push(`- ${CLASSES[id].name}: ${p.ok}/${p.n}（${Math.round((100 * p.ok) / p.n)}%） 反応中央 開始から${med(p.onset) ?? "-"}ms・読み終わりから${med(p.onsetEnd) ?? "-"}ms（読み上げ${med(p.sayMs) ?? "-"}ms） 判定内訳 ${Object.entries(r.conf[id]).map(([k, n]) => `${CLASSES[k].name}${n}`).join(" ")}`); }
       const pair = (a, b) => (r.conf[a]?.[b] || 0);
       lines.push(`Q2 中段→刀を立てる ${pair("chudan", "guard")}回 / 刀を立てる→中段 ${pair("guard", "chudan")}回`);
       lines.push(`Q1 半身→ステップ ${pair("hanmiR", "stepR") + pair("hanmiR", "stepL") + pair("hanmiL", "stepR") + pair("hanmiL", "stepL")}回 / ステップ→半身 ${pair("stepR", "hanmiR") + pair("stepR", "hanmiL") + pair("stepL", "hanmiR") + pair("stepL", "hanmiL")}回 / 半身の左右逆 ${pair("hanmiR", "hanmiL") + pair("hanmiL", "hanmiR")}回`);
-      // 半身の指標の大きさ（閾値を決める材料）
-      for (const id of ["hanmiR", "hanmiL", "guard", "chudan"]) {
-        const xs = ts.filter((t) => t.label === id && t.backCm == null);
-        if (xs.length) lines.push(`  ${CLASSES[id].name}のピーク中央: 奥行き差${med(xs.map((t) => t.peak.dz ?? 0))?.toFixed(3)}m 肩幅の縮み${med(xs.map((t) => t.peak.swDrop ?? 0))?.toFixed(3)} 手の高さ${med(xs.map((t) => t.peak.handUp ?? 0))?.toFixed(2)} 前腕${med(xs.map((t) => t.peak.forearm ?? 0))?.toFixed(0)}度 横ずれ${med(xs.map((t) => t.peak.shift ?? 0))?.toFixed(2)}`);
+      // ラベルごとの指標のピーク（窓の中で絶対値が最大の値）の中央。閾値を決める材料
+      lines.push("ピーク中央（横ずれ/沈み/下がり/肩幅の縮み/奥行き差m/手の高さ/両手の間/前腕度/手先度）");
+      const f2 = (v, d = 2) => (v == null ? "-" : v.toFixed(d));
+      for (const id of CLASS_IDS) {
+        const xs = ts.filter((t) => t.label === id && t.backCm == null); if (!xs.length) continue;
+        const pm = (k) => med(xs.map((t) => t.peak?.[k] ?? 0));
+        lines.push(`  ${CLASSES[id].name}: ${f2(pm("shift"))}/${f2(pm("drop"))}/${f2(pm("back"), 3)}/${f2(pm("swDrop"))}/${f2(pm("dz"), 3)}/${f2(pm("handUp"))}/${f2(pm("gap"))}/${f2(pm("forearm"), 0)}/${f2(pm("handDir"), 0)}`);
+      }
+      // 外れた試行の中身（奥行き差は窓の中の最大と最小の両方。左右の取り違えの原因を見る）
+      const miss = ts.filter((t) => t.backCm == null && !t.correct);
+      if (miss.length) {
+        lines.push("外れた試行（指示→判定 / 判定まで ms / 横ずれ・沈み・下がり・肩幅の縮み・奥行き差の最大〜最小・手の高さ）");
+        for (const t of miss.slice(-20)) {
+          const ex = (k) => { const i = (t.fields || []).indexOf(k) + 1; const v = i ? t.frames.filter((f) => f[0] >= t.sayT && f[0] <= t.winEnd).map((f) => f[i]) : []; return v.length ? [Math.max(...v), Math.min(...v)] : [0, 0]; };
+          const dz = ex("dz");
+          lines.push(`  #${t.id} ${CLASSES[t.label].name}→${CLASSES[t.pred].name} / ${t.onsetMs ?? "-"} / ${f2(t.peak?.shift)}・${f2(t.peak?.drop)}・${f2(t.peak?.back, 3)}・${f2(t.peak?.swDrop)}・${f2(dz[0], 3)}〜${f2(dz[1], 3)}・${f2(t.peak?.handUp)}`);
+        }
       }
     }
     const cms = Object.keys(r.backBy).map(Number).sort((a, b) => a - b);

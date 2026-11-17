@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>回避判定ラボ</title>
+<style>
+  :root { --bg:#111; --fg:#eee; --mut:#999; --ok:#5fd18a; --ng:#e8664f; --acc:#f2c14e; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font-family: -apple-system, "Hiragino Sans", sans-serif; }
+  body { display:flex; flex-direction:column; overflow:hidden; }
+  nav { display:flex; gap:4px; padding:6px; padding-top:max(6px, env(safe-area-inset-top)); background:#000; }
+  nav button { flex:1; padding:10px 4px; font-size:14px; background:#222; color:var(--fg); border:1px solid #333; border-radius:6px; }
+  nav button.on { background:var(--acc); color:#000; font-weight:bold; }
+  #stage { position:relative; flex:1; min-height:0; background:#000; }
+  #video, #overlay { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; transform:scaleX(-1); }
+  #hud { position:absolute; left:6px; top:6px; font:12px/1.35 ui-monospace, Menlo, monospace; background:rgba(0,0,0,.6); padding:6px 8px; border-radius:6px; white-space:pre; pointer-events:none; }
+  #msg { position:absolute; left:0; right:0; top:40%; text-align:center; font-size:18px; padding:0 16px; }
+  .panel { padding:8px; background:#181818; border-top:1px solid #333; max-height:42vh; overflow:auto; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:4px 0; }
+  .row label { font-size:13px; color:var(--mut); }
+  button.b { padding:10px 12px; font-size:15px; background:#2c2c2c; color:var(--fg); border:1px solid #444; border-radius:6px; }
+  button.b.main { background:var(--acc); color:#000; font-weight:bold; }
+  select { padding:8px; font-size:14px; background:#222; color:var(--fg); border:1px solid #444; border-radius:6px; }
+  textarea { width:100%; height:160px; font:11px ui-monospace, Menlo, monospace; background:#000; color:#ddd; border:1px solid #333; }
+  .mut { color:var(--mut); font-size:12px; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<nav>
+  <button data-mode="A" class="on">ラボA 姿勢</button>
+  <button data-mode="B">ラボB 攻撃</button>
+  <button data-mode="C">ラボC ログ</button>
+</nav>
+
+<div id="stage">
+  <video id="video" playsinline muted></video>
+  <canvas id="overlay"></canvas>
+  <div id="hud">カメラ停止中</div>
+  <div id="msg">下の「カメラ開始」を押してください</div>
+</div>
+
+<!-- 共通：カメラ設定（段階1） -->
+<div class="panel" id="p-common">
+  <div class="row">
+    <button class="b main" id="btn-cam">カメラ開始</button>
+    <button class="b" id="btn-voice">音声・電子音テスト</button>
+  </div>
+  <div class="row">
+    <label>解像度</label>
+    <select id="sel-res">
+      <option value="640x480" selected>640×480（本編と同じ）</option>
+      <option value="1280x720">1280×720</option>
+      <option value="1920x1080">1920×1080</option>
+    </select>
+    <label>要求FPS</label>
+    <select id="sel-fps">
+      <option value="30">30</option>
+      <option value="60" selected>60</option>
+    </select>
+    <label>モデル</label>
+    <select id="sel-model">
+      <option value="lite" selected>lite（本編と同じ）</option>
+      <option value="full">full</option>
+    </select>
+  </div>
+  <div class="mut">設定を変えたら、カメラを止めてからもう一度開始してください。</div>
+</div>
+
+<div class="panel" id="p-A"><div class="mut">ラボA（指標・キャリブレーション・ラベル付き計測）は段階2で作ります。</div></div>
+<div class="panel" id="p-B" hidden><div class="mut">ラボB（敵の攻撃と回避）は段階3で作ります。</div></div>
+<div class="panel" id="p-C" hidden>
+  <div class="row">
+    <button class="b" id="btn-dl-json">JSONを保存</button>
+    <button class="b" id="btn-refresh">要約を更新</button>
+    <button class="b" id="btn-copy">要約をコピー</button>
+    <button class="b" id="btn-clear">ログを消す</button>
+  </div>
+  <textarea id="summary" readonly></textarea>
+  <div class="mut">一覧・タイムライン・CSVは段階4で作ります。</div>
+</div>
+
+<script type="module">
+// 回避判定ラボ（使い捨ての実験）。本編（suburi-bugeicho）のファイルは読み込まない。
+// 骨格推定は本編と同じ MediaPipe tasks-vision 0.10.14 / PoseLandmarker / VIDEO モード / GPU→CPU。
+const $ = (id) => document.getElementById(id);
+const VISION = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+const MODELS = {
+  lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+  full: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
+};
+const LOG_KEY = "dodgelab.log.v1";
+
+// ---------- ログ ----------
+function newLog() {
+  return {
+    version: 1,
+    createdAt: new Date().toISOString(),
+    device: {
+      ua: navigator.userAgent, platform: navigator.platform,
+      screen: { w: screen.width, h: screen.height, dpr: devicePixelRatio },
+      hw: navigator.hardwareConcurrency || null,
+    },
+    sessions: [],   // カメラを開始するたびに1つ
+    events: [],     // { t:ms(経過), at:ISO, type, ... }
+    perf: [],       // 1秒ごと { t, poseFps, inferMs, inferMsMax, camFps, sessionId }
+    trials: [],     // 段階2以降で使う
+  };
+}
+let LOG;
+try { LOG = JSON.parse(localStorage.getItem(LOG_KEY)) || newLog(); } catch { LOG = newLog(); }
+const T0 = performance.now(), T0wall = Date.now();
+const now = () => performance.now();
+function logEvent(type, data = {}) {
+  const e = { t: Math.round(now()), at: new Date(T0wall + (now() - T0)).toISOString(), type, ...data };
+  LOG.events.push(e);
+  saveLogSoon();
+  return e;
+}
+let saveTimer = 0;
+function saveLogSoon() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try { localStorage.setItem(LOG_KEY, JSON.stringify(LOG)); }
+    catch (err) { console.warn("ログの保存に失敗", err); }
+  }, 1000);
+}
+logEvent("page_open");
+
+// ---------- 音声・電子音（ハンズフリー用） ----------
+let ac = null, jaVoice = null;
+function unlockAudio() {
+  if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch {} }
+  if (ac && ac.state === "suspended") ac.resume();
+  // iOS はタップの中で一度しゃべらせないと、後の自動の読み上げが鳴らないことがある
+  if (window.speechSynthesis && !unlockAudio.done) {
+    const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); unlockAudio.done = true;
+  }
+}
+function pickVoice() {
+  const vs = window.speechSynthesis ? speechSynthesis.getVoices() : [];
+  jaVoice = vs.find((v) => /ja/i.test(v.lang) && /Kyoko|O-ren|Otoya|Hattori/i.test(v.name)) || vs.find((v) => /ja/i.test(v.lang)) || null;
+}
+if (window.speechSynthesis) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+function say(text) {
+  if (!window.speechSynthesis) return;
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = "ja-JP"; if (jaVoice) u.voice = jaVoice; u.rate = 1.1; u.volume = 1;
+  speechSynthesis.cancel(); speechSynthesis.speak(u);
+  logEvent("say", { text });
+}
+function beep(f = 880, ms = 120, vol = 0.4) {
+  if (!ac) return;
+  const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
+  o.type = "square"; o.frequency.value = f;
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + ms / 1000);
+  o.connect(g).connect(ac.destination); o.start(t); o.stop(t + ms / 1000 + 0.02);
+}
+$("btn-voice").onclick = () => {
+  unlockAudio();
+  beep(660, 100); setTimeout(() => beep(990, 100), 150);
+  setTimeout(() => say("音声テスト。半身、右。"), 400);
+};
+
+// ---------- カメラ＋骨格推定 ----------
+const video = $("video"), cv = $("overlay"), ctx = cv.getContext("2d");
+let stream = null, landmarker = null, landmarkerKey = "", delegate = "", running = false, lastVideoTime = -1, wakeLock = null;
+let session = null;
+// 計測
+let camFrames = 0, poseFrames = 0, inferSum = 0, inferMax = 0, perfTimer = 0;
+let shown = { poseFps: 0, camFps: 0, inferMs: 0, inferMsMax: 0 };
+let lastPose = null;
+
+async function loadLandmarker(kind) {
+  const key = kind;
+  if (landmarker && landmarkerKey === key) return;
+  if (landmarker) { try { landmarker.close(); } catch {} landmarker = null; }
+  const vision = await import(`${VISION}/vision_bundle.mjs`);
+  const files = await vision.FilesetResolver.forVisionTasks(`${VISION}/wasm`);
+  const opts = (d) => ({ baseOptions: { modelAssetPath: MODELS[kind], delegate: d }, runningMode: "VIDEO", numPoses: 1 });
+  try { landmarker = await vision.PoseLandmarker.createFromOptions(files, opts("GPU")); delegate = "GPU"; }
+  catch (e) { console.warn("GPU不可、CPUで動かします", e); landmarker = await vision.PoseLandmarker.createFromOptions(files, opts("CPU")); delegate = "CPU"; }
+  landmarkerKey = key;
+}
+
+async function startCamera() {
+  unlockAudio();
+  const msg = $("msg"); msg.hidden = false;
+  if (!navigator.mediaDevices?.getUserMedia) { msg.textContent = "このブラウザはカメラに対応していません（https で開いてください）"; return; }
+  const [w, h] = $("sel-res").value.split("x").map(Number);
+  const fps = +$("sel-fps").value, model = $("sel-model").value;
+  const req = { facingMode: "user", width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: fps } };
+  $("btn-cam").disabled = true; msg.textContent = "カメラを開いています…";
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: req, audio: false }); }
+  catch (e) { stream = null; $("btn-cam").disabled = false; msg.textContent = "カメラを開けません: " + (e.name || e); logEvent("camera_error", { err: String(e.name || e) }); return; }
+  video.srcObject = stream; await video.play();
+  try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {}
+  msg.textContent = "骨格推定のモデルを読み込んでいます…";
+  try { await loadLandmarker(model); }
+  catch (e) { msg.textContent = "モデルを読み込めません: " + e; logEvent("model_error", { err: String(e) }); stopCamera(); return; }
+
+  const track = stream.getVideoTracks()[0];
+  const st = track.getSettings ? track.getSettings() : {};
+  const caps = track.getCapabilities ? track.getCapabilities() : null;
+  session = {
+    id: LOG.sessions.length + 1, startT: Math.round(now()), startAt: new Date().toISOString(),
+    requested: { width: w, height: h, frameRate: fps }, model, delegate,
+    actual: { width: st.width ?? video.videoWidth, height: st.height ?? video.videoHeight, frameRate: st.frameRate ?? null, facingMode: st.facingMode ?? null },
+    videoSize: { w: video.videoWidth, h: video.videoHeight },
+    capsFrameRate: caps?.frameRate ? { min: caps.frameRate.min, max: caps.frameRate.max } : null,
+  };
+  LOG.sessions.push(session); logEvent("camera_start", { sessionId: session.id, actual: session.actual, delegate, model });
+
+  msg.hidden = true;
+  $("btn-cam").textContent = "カメラ停止"; $("btn-cam").disabled = false;
+  camFrames = poseFrames = inferSum = inferMax = 0;
+  running = true;
+  countCamFrames();
+  requestAnimationFrame(loop);
+  clearInterval(perfTimer); perfTimer = setInterval(perfTick, 1000);
+}
+
+function stopCamera() {
+  running = false; clearInterval(perfTimer);
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null; video.srcObject = null;
+  try { wakeLock?.release(); } catch {} wakeLock = null;
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  if (session) { session.endT = Math.round(now()); logEvent("camera_stop", { sessionId: session.id }); }
+  $("btn-cam").textContent = "カメラ開始"; $("btn-cam").disabled = false;
+  $("msg").hidden = false; $("msg").textContent = "カメラ停止中";
+  $("hud").textContent = "カメラ停止中";
+}
+$("btn-cam").onclick = () => (stream ? stopCamera() : startCamera());
+
+// カメラの実FPS：requestVideoFrameCallback があればそれで、無ければ currentTime の変化で数える
+function countCamFrames() {
+  if (!running) return;
+  if (video.requestVideoFrameCallback) {
+    const cb = () => { if (!running) return; camFrames++; video.requestVideoFrameCallback(cb); };
+    video.requestVideoFrameCallback(cb);
+    countCamFrames.rvfc = true;
+  } else countCamFrames.rvfc = false;
+}
+
+function loop() {
+  if (!running) return;
+  try {
+    if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+      lastVideoTime = video.currentTime;
+      if (!countCamFrames.rvfc) camFrames++;
+      const t0 = now();
+      const res = landmarker.detectForVideo(video, t0);
+      const dt = now() - t0;
+      poseFrames++; inferSum += dt; if (dt > inferMax) inferMax = dt;
+      if (cv.width !== video.videoWidth) { cv.width = video.videoWidth; cv.height = video.videoHeight; }
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      const lm = res.landmarks && res.landmarks[0];
+      lastPose = lm ? { t: t0, lm, wl: res.worldLandmarks && res.worldLandmarks[0] } : null;
+      if (lm) drawSkeleton(lm);
+    }
+  } catch (e) { console.error(e); }
+  requestAnimationFrame(loop);
+}
+
+const BONES = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[0,11],[0,12]];
+function drawSkeleton(lm) {
+  const W = cv.width, H = cv.height;
+  ctx.lineWidth = Math.max(2, W / 180); ctx.lineCap = "round";
+  ctx.strokeStyle = "rgba(95,209,138,.9)";
+  for (const [a, b] of BONES) {
+    const p = lm[a], q = lm[b];
+    if ((p.visibility ?? 1) < 0.3 || (q.visibility ?? 1) < 0.3) continue;
+    ctx.beginPath(); ctx.moveTo(p.x * W, p.y * H); ctx.lineTo(q.x * W, q.y * H); ctx.stroke();
+  }
+  ctx.fillStyle = "#f2c14e";
+  for (const i of [0, 11, 12, 13, 14, 15, 16, 23, 24]) {
+    const p = lm[i]; if ((p.visibility ?? 1) < 0.3) continue;
+    ctx.beginPath(); ctx.arc(p.x * W, p.y * H, Math.max(3, W / 120), 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+function perfTick() {
+  shown = {
+    poseFps: poseFrames, camFps: camFrames,
+    inferMs: poseFrames ? +(inferSum / poseFrames).toFixed(1) : 0, inferMsMax: +inferMax.toFixed(1),
+  };
+  camFrames = poseFrames = inferSum = inferMax = 0;
+  LOG.perf.push({ t: Math.round(now()), sessionId: session?.id, ...shown, body: !!lastPose });
+  if (LOG.perf.length > 20000) LOG.perf.splice(0, LOG.perf.length - 20000);
+  saveLogSoon();
+  const a = session?.actual || {};
+  $("hud").textContent =
+    `骨格FPS  ${shown.poseFps}\n推論     ${shown.inferMs} ms（最大 ${shown.inferMsMax}）\n` +
+    `カメラ   ${a.width}×${a.height}  実 ${shown.camFps} fps（申告 ${a.frameRate ?? "?"}）\n` +
+    `モデル   ${session?.model} / ${delegate}\n体       ${lastPose ? "映っている" : "見えない"}`;
+}
+
+// ---------- メニュー ----------
+document.querySelectorAll("nav button").forEach((b) => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("on", x === b));
+  for (const m of ["A", "B", "C"]) $("p-" + m).hidden = m !== b.dataset.mode;
+  if (b.dataset.mode === "C") refreshSummary();
+  logEvent("mode", { mode: b.dataset.mode });
+});
+
+// ---------- ラボC（段階1の最小版：要約・JSON保存） ----------
+function stats(arr) {
+  if (!arr.length) return null;
+  const s = [...arr].sort((a, b) => a - b), q = (p) => s[Math.min(s.length - 1, Math.floor(p * s.length))];
+  return { n: s.length, min: s[0], med: q(0.5), p10: q(0.1), p90: q(0.9), max: s[s.length - 1] };
+}
+function refreshSummary() {
+  const d = LOG.device, lines = [];
+  lines.push("# 回避判定ラボ 要約", `作成 ${new Date().toISOString()}`, `端末 ${d.ua}`, `画面 ${d.screen.w}x${d.screen.h} dpr${d.screen.dpr} / CPU ${d.hw ?? "?"}`);
+  for (const s of LOG.sessions) {
+    const p = LOG.perf.filter((x) => x.sessionId === s.id && x.poseFps > 0);
+    const pf = stats(p.map((x) => x.poseFps)), cf = stats(p.map((x) => x.camFps)), im = stats(p.map((x) => x.inferMs));
+    lines.push(
+      `## セッション${s.id} ${s.startAt}`,
+      `要求 ${s.requested.width}x${s.requested.height}@${s.requested.frameRate} → 実 ${s.actual.width}x${s.actual.height} 申告${s.actual.frameRate ?? "?"}fps（端末の上限 ${s.capsFrameRate ? s.capsFrameRate.max : "?"}）`,
+      `モデル ${s.model} / ${s.delegate}`,
+      pf ? `骨格FPS 中央${pf.med}（10%点 ${pf.p10} / 90%点 ${pf.p90}）  カメラ実FPS 中央${cf.med}  推論 中央${im.med}ms（90%点 ${im.p90}ms）  計${pf.n}秒` : "計測なし",
+    );
+  }
+  lines.push(`試行 ${LOG.trials.length} 件（段階2以降）`);
+  $("summary").value = lines.join("\n");
+}
+$("btn-refresh").onclick = refreshSummary;
+$("btn-copy").onclick = async () => {
+  refreshSummary();
+  try { await navigator.clipboard.writeText($("summary").value); $("btn-copy").textContent = "コピーしました"; }
+  catch { $("summary").select(); document.execCommand("copy"); $("btn-copy").textContent = "コピーしました"; }
+  setTimeout(() => ($("btn-copy").textContent = "要約をコピー"), 1500);
+};
+function download(name, text, type) {
+  const blob = new Blob([text], { type }), url = URL.createObjectURL(blob), a = document.createElement("a");
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+$("btn-dl-json").onclick = () => download(`dodgelab_${Date.now()}.json`, JSON.stringify(LOG, null, 1), "application/json");
+$("btn-clear").onclick = () => {
+  if (!confirm("このブラウザに残っているラボのログを消します。よろしいですか？")) return;
+  LOG = newLog(); try { localStorage.removeItem(LOG_KEY); } catch {}
+  logEvent("log_cleared"); refreshSummary();
+};
+
+// 裏に回ったら記録だけ残す
+document.addEventListener("visibilitychange", () => logEvent(document.hidden ? "hidden" : "visible"));
+window.__lab = { get LOG() { return LOG; } }; // 確認用
+</script>
+</body>
+</html>

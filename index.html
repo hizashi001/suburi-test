@@ -217,7 +217,7 @@ async function startCamera() {
   camFrames = poseFrames = inferSum = inferMax = 0;
   running = true;
   countCamFrames();
-  requestAnimationFrame(loop);
+  const lg = ++loopGen; requestAnimationFrame(() => loop(lg));
   clearInterval(perfTimer); perfTimer = setInterval(perfTick, 1000);
 }
 
@@ -235,20 +235,26 @@ function stopCamera() {
 $("btn-cam").onclick = () => (stream ? stopCamera() : startCamera());
 
 // カメラの実FPS：requestVideoFrameCallback があればそれで、無ければ currentTime の変化で数える
+// カメラを開き直すたびに数え方の世代を変え、前の世代の数え方は止める（止めないと二重・三重に数える）
+let camGen = 0, newFrame = false;
 function countCamFrames() {
   if (!running) return;
+  const gen = ++camGen;
   if (video.requestVideoFrameCallback) {
-    const cb = () => { if (!running) return; camFrames++; video.requestVideoFrameCallback(cb); };
+    const cb = () => { if (!running || gen !== camGen) return; camFrames++; newFrame = true; video.requestVideoFrameCallback(cb); };
     video.requestVideoFrameCallback(cb);
     countCamFrames.rvfc = true;
   } else countCamFrames.rvfc = false;
 }
 
-function loop() {
-  if (!running) return;
+let loopGen = 0;
+function loop(gen) {
+  if (!running || gen !== loopGen) return;
   try {
-    if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
-      lastVideoTime = video.currentTime;
+    // 新しいコマが届いたときだけ推定する（rVFC があればそれで、無ければ currentTime の変化で見る）
+    const fresh = countCamFrames.rvfc ? newFrame : video.currentTime !== lastVideoTime;
+    if (video.readyState >= 2 && fresh) {
+      lastVideoTime = video.currentTime; newFrame = false;
       if (!countCamFrames.rvfc) camFrames++;
       const t0 = now();
       const res = landmarker.detectForVideo(video, t0);
@@ -261,7 +267,7 @@ function loop() {
       if (lm) drawSkeleton(lm);
     }
   } catch (e) { console.error(e); }
-  requestAnimationFrame(loop);
+  requestAnimationFrame(() => loop(gen));
 }
 
 const BONES = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[0,11],[0,12]];

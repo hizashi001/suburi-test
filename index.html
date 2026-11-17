@@ -129,7 +129,7 @@
 <div class="panel" id="p-B" hidden>
   <div class="row">
     <button class="b main" id="btn-runB">開始</button>
-    <label>回数</label><input type="number" id="b-n" value="10" min="1" max="60" style="width:4em">
+    <label>まとまりの数</label><input type="number" id="b-n" value="10" min="1" max="60" style="width:4em">
     <label>判定</label>
     <select id="b-mode">
       <option value="1">1 なんでも成功</option>
@@ -137,9 +137,27 @@
       <option value="3">3 記録のみ</option>
     </select>
   </div>
-  <div class="mut">基準はラボAの「基準を取る」で取ったものを使います。開始すると画面が敵だけになり、左下の「止める」で止まります。</div>
+  <div class="row">
+    <label>内容</label>
+    <select id="b-kind">
+      <option value="attack" selected>攻撃</option>
+      <option value="idle">攻撃なし（誤検知の試験）</option>
+    </select>
+    <label>攻撃なしの長さ 秒</label><input type="number" id="b-idlesec" value="60" min="10" max="300" style="width:4.5em">
+  </div>
+  <div class="mut">基準はラボAの「基準を取る」で取ったものを使います。開始すると画面が敵だけになり、左下の「止める」で止まります。「回数」は攻撃のまとまり（連撃なら1連撃）の数です。</div>
   <details open><summary>攻撃</summary>
     <div class="row chips" id="b-types"></div>
+    <div class="row">
+      <label>回数</label>
+      <select id="b-combo"><option value="1" selected>単発</option><option value="2">2連撃</option><option value="3">3連撃</option><option value="4">4連撃</option><option value="mix">単発〜4連撃を混ぜる</option></select>
+      <label>連撃の間隔（命中→命中）ms</label><input type="number" id="b-intmin" value="700" style="width:4.5em"><label>〜</label><input type="number" id="b-intmax" value="1100" style="width:4.5em">
+    </div>
+    <div class="row">
+      <label>反撃の素振り</label>
+      <select id="b-counter"><option value="0" selected>しない</option><option value="1">よけたあとに1回振る（合図の音あり）</option></select>
+      <span class="mut">素振りや体の揺れを回避と間違えないかを見ます</span>
+    </div>
     <div class="row">
       <label>速さ</label>
       <select id="b-speed"><option value="slow">遅</option><option value="mid" selected>中</option><option value="fast">速</option><option value="mix">混ぜる</option></select>
@@ -197,8 +215,18 @@
     <button class="b" id="btn-copy">要約をコピー</button>
     <button class="b" id="btn-clear">ログを消す</button>
   </div>
+  <div class="row"><button class="b" id="btn-dl-csv">CSVを保存</button></div>
   <textarea id="summary" readonly></textarea>
-  <div class="mut">一覧・タイムライン・CSVは段階4で作ります。</div>
+  <details open><summary>試行の一覧（行を押すとタイムライン）</summary>
+    <div class="row">
+      <label>種類</label>
+      <select id="c-kind"><option value="labB">ラボB</option><option value="labA">ラボA</option><option value="labB-idle">攻撃なし</option></select>
+      <label>計測</label><select id="c-run"></select>
+    </div>
+    <canvas id="c-tl" width="900" height="260" style="width:100%;height:auto;background:#0b0b0b;border:1px solid #333"></canvas>
+    <div class="mut" id="c-tl-cap">行を選ぶと、ここに時間の流れ（予告・命中・判定の窓・拾った動き・指標）を描きます。</div>
+    <div style="overflow:auto;max-height:40vh"><table id="c-list"></table></div>
+  </details>
 </div>
 
 <script type="module">
@@ -484,7 +512,7 @@ const CLASS_IDS = Object.keys(CLASSES).filter((id) => !CLASSES[id].internal);
 const BACK_CM = [10, 20, 30, 50];
 
 // 指標（1コマ分）。frames に残すのはこの順の数値の配列
-const FIELDS = ["shift", "drop", "back", "swDrop", "dz", "tilt", "handUp", "gap", "forearm", "handZ", "handDir", "gapY", "hipShift", "leanX", "leanZ"];
+const FIELDS = ["shift", "drop", "back", "swDrop", "dz", "tilt", "handUp", "gap", "forearm", "handZ", "handDir", "gapY", "hipShift", "leanX", "leanZ", "hspd"];
 const METRIC_INFO = {
   shift:   { name: "横ずれ", unit: "胴", desc: "肩の中点の横の動き（+が自分の左）", lo: -1, hi: 1 },
   drop:    { name: "沈み", unit: "胴", desc: "肩の中点が下がった量", lo: -0.3, hi: 0.8 },
@@ -500,6 +528,7 @@ const METRIC_INFO = {
   hipShift:{ name: "腰の横ずれ", unit: "胴", desc: "腰の中点の横の動き（+が自分の左）。足を運んだかどうか", lo: -1, hi: 1 },
   leanX:   { name: "上体の横倒し", unit: "胴", desc: "肩の中点が腰の中点より横に出た量（基準との差、+が自分の左）。足は動かさず上体だけ倒すと大きい", lo: -0.6, hi: 0.6 },
   leanZ:   { name: "上体の前後", unit: "m", desc: "3D推定の肩の中点の奥行き（腰が基準、基準との差）。+が奥＝反らす、−が手前＝前にかがむ", lo: -0.4, hi: 0.4 },
+  hspd:    { name: "手の速さ", unit: "胴/秒", desc: "両手の中点の画面上の速さ。素振りがあったかを見る（段階4）", lo: 0, hi: 8 },
   handDir: { name: "手先の向き", unit: "度", desc: "手首→指の付け根（人差し指と小指の中点）の向き。0=真上、180=真下。刀を立てると手首の返しで変わるかを見る", lo: 0, hi: 180 },
 };
 
@@ -518,6 +547,8 @@ Object.assign(TH_DEFAULT, { step: 0.3, hanmiSw: 0.13, hanmiZ: 0.07, guardUp: 0.0
 delete TH_DEFAULT.guardGap;
 // v4：ステップは「腰が動いた」で見る（肩だけ動くのは上体を倒しただけ）。上体の横倒し・前後は仮の値（実機で決める）
 Object.assign(TH_DEFAULT, { leanX: 0.15, sway: 0.08 });
+// 段階4：素振りがあったとみなす手の速さ（胴の長さ/秒、仮の値）。判定には使わず、反撃の素振りの記録だけに使う
+TH_DEFAULT.swing = 2.5;
 const TH_INFO = {
   crouch:  { name: "しゃがみ：沈み >", min: 0.1, max: 1, step: 0.01 },
   step:    { name: "ステップ：腰の横ずれ >", min: 0.1, max: 1.5, step: 0.01 },
@@ -530,6 +561,7 @@ const TH_INFO = {
   hanmiDir:{ name: "半身の向き：奥行き差 ≥", min: 0, max: 0.2, step: 0.01 },
   back:    { name: "下がり：縮み >", min: 0.01, max: 0.2, step: 0.005 },
   holdMs:  { name: "続いた時間 ms ≥", min: 0, max: 600, step: 10 },
+  swing:   { name: "素振りあり：手の速さ >", min: 0.5, max: 8, step: 0.1 },
 };
 let TH;
 try { TH = { ...TH_DEFAULT, ...(JSON.parse(localStorage.getItem(TH_KEY)) || {}) }; } catch { TH = { ...TH_DEFAULT }; }
@@ -581,7 +613,7 @@ function raw(lm, wl) {
     handZ = ((wl[11].z + wl[12].z) / 2) - ((wl[15].z * vl + wl[16].z * vr) / (vl + vr)); // +が前（カメラ側）
   }
   return {
-    smx: sm.x, smy: sm.y, hmx: hm.x, hmy: hm.y, leanZ, T, sw, leg, tilt: Math.atan2(ls.y - rs.y, ls.x - rs.x) * 180 / Math.PI, // 正面を向けば0度付近（左肩は元の映像の右側）
+    smx: sm.x, smy: sm.y, hmx: hm.x, hmy: hm.y, hx: hand.x, hy: hand.y, leanZ, T, sw, leg, tilt: Math.atan2(ls.y - rs.y, ls.x - rs.x) * 180 / Math.PI, // 正面を向けば0度付近（左肩は元の映像の右側）
     handUp: (sm.y - hand.y) / T, gap: dist(lw, rw) / T, gapY: Math.abs(lw.y - rw.y) / T, forearm, handDir, dz, handZ,
   };
 }
@@ -613,7 +645,7 @@ let CAL = null;
 try { CAL = JSON.parse(localStorage.getItem(CAL_KEY)); } catch {}
 let anchor = CAL ? { ...CAL } : null;     // 位置の基準。計測中は試行ごとに取り直す
 const recentRaw = [];                      // 直近の生の量 { t, r }
-let liveM = null, liveCls = null, smooth = null;
+let liveM = null, liveCls = null, smooth = null, prevHand = null;
 const hist = [];                           // 直近3秒の指標 { t, m }
 let capture = null;                        // 計測中に frames をためる先 { frames: [] }
 
@@ -624,6 +656,9 @@ function onPose(lm, wl, t) {
   recentRaw.push({ t, r }); while (recentRaw.length && t - recentRaw[0].t > 3500) recentRaw.shift();
   if (!CAL || !anchor) { $("big").textContent = ""; return; }
   const m0 = metrics(r, CAL, anchor);
+  // 手の速さ（胴の長さ/秒）。前のコマとの差から
+  m0.hspd = prevHand && t > prevHand.t ? Math.hypot(r.hx - prevHand.x, r.hy - prevHand.y) / CAL.T / ((t - prevHand.t) / 1000) : 0;
+  prevHand = { t, x: r.hx, y: r.hy };
   // 軽くならす（ガタつき対策。遅れは1〜2コマ）
   smooth = smooth ? Object.fromEntries(FIELDS.map((k) => [k, smooth[k] * 0.5 + m0[k] * 0.5])) : m0;
   liveM = smooth;
@@ -963,7 +998,8 @@ for (const id of ATK_IDS) {
   $("b-types").append(l);
 }
 const B_INPUTS = ["b-n", "b-mode", "b-speed", "b-ms-slow", "b-ms-mid", "b-ms-fast", "b-windup", "b-holdmin", "b-holdmax", "b-kamaemin", "b-kamaemax",
-  "b-tel-mark", "b-tel-ring", "b-tel-sound", "b-lead", "b-leadmix", "b-pre", "b-post", "b-table", "b-size", "b-contrast", "b-posy", "b-posx", "b-cam", "b-fb"];
+  "b-tel-mark", "b-tel-ring", "b-tel-sound", "b-lead", "b-leadmix", "b-pre", "b-post", "b-table", "b-size", "b-contrast", "b-posy", "b-posx", "b-cam", "b-fb",
+  "b-kind", "b-idlesec", "b-combo", "b-intmin", "b-intmax", "b-counter"];
 function bGet() {
   const o = {};
   for (const id of B_INPUTS) { const el = $(id); o[id] = el.type === "checkbox" ? el.checked : el.value; }
@@ -1001,15 +1037,26 @@ const lerp = (a, b, k) => a + (b - a) * k;
 const clamp01 = (x) => Math.max(0, Math.min(1, x));
 const easeIO = (k) => (k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2);
 const mixPose = (a, b, k) => ({ hx: lerp(a.hx, b.hx, k), hy: lerp(a.hy, b.hy, k), th: lerp(a.th, b.th, k), len: lerp(a.len, b.len, k), sc: lerp(a.sc ?? 1, b.sc ?? 1, k) });
+// 連撃（段階4）：2本目からは前の振り抜きの姿勢（from）から直接振りかぶる。構えに戻るのは最後の1本だけ（last）
 function poseAt(a, t) {
-  if (!a || t < a.windupStart) return KAMAE;
+  const from = a?.from || KAMAE;
+  if (!a || t < a.windupStart) return from;
   const K = ATK[a.type];
-  if (t < a.windupEnd) return mixPose(KAMAE, K.windup, easeIO(clamp01((t - a.windupStart) / (a.windupEnd - a.windupStart))));
+  if (t < a.windupEnd) return mixPose(from, K.windup, easeIO(clamp01((t - a.windupStart) / (a.windupEnd - a.windupStart))));
   if (t < a.strikeStart) return mixPose(K.windup, K.windup, 0);
   if (t < a.hitT) { const k = clamp01((t - a.strikeStart) / (a.hitT - a.strikeStart)); return mixPose(K.windup, K.hit, k * k); }       // 加速しながら命中へ
   if (t < a.endT) { const k = clamp01((t - a.hitT) / (a.endT - a.hitT)); return mixPose(K.hit, K.end, 1 - (1 - k) * (1 - k)); }       // 振り抜き
+  if (a.last === false) return { ...K.end, sc: K.end.sc ?? 1 };
   if (t < a.recoverEnd) return mixPose(K.end, KAMAE, easeIO(clamp01((t - a.endT) / (a.recoverEnd - a.endT))));
   return KAMAE;
+}
+// 連撃のうち、今の時刻に動いている1本（振りかぶりが始まった最後の1本）
+let curCombo = null;
+function activeAtk(t) {
+  if (!curCombo) return curAtk;
+  let a = curCombo[0];
+  for (const x of curCombo) if (t >= x.windupStart) a = x;
+  return a;
 }
 function drawEnemy() {
   requestAnimationFrame(drawEnemy);
@@ -1017,7 +1064,7 @@ function drawEnemy() {
   const dpr = Math.min(2, devicePixelRatio || 1);
   const W = Math.round(ecv.clientWidth * dpr), H = Math.round(ecv.clientHeight * dpr);
   if (ecv.width !== W || ecv.height !== H) { ecv.width = W; ecv.height = H; }
-  const t = now(), o = bGet(), a = curAtk, p = poseAt(a, t);
+  const t = now(), o = bGet(), a = activeAtk(t), p = poseAt(a, t);
   const con = +o["b-contrast"], size = +o["b-size"];
   eg.fillStyle = "#0e0e10"; eg.fillRect(0, 0, W, H);
   const U = Math.min(H * 0.3, W * 0.42) * size * (p.sc ?? 1);
@@ -1062,14 +1109,15 @@ function drawEnemy() {
     eg.beginPath(); eg.moveTo(hx, hy); eg.lineTo(tipX, tipY); eg.stroke();
   }
   if (a?.type === "tsuki" && t >= a.strikeStart && t <= a.endT) { eg.fillStyle = steel; eg.beginPath(); eg.arc(tipX, tipY, U * 0.06, 0, Math.PI * 2); eg.fill(); }
-  // 予告
-  if (a && a.teleT != null && t >= a.teleT && t <= a.hitT + 80) {
-    if (a.tel.mark) {
+  // 予告（連撃では1本ずつ。重なってもそれぞれ出す）
+  for (const b of curCombo || (a ? [a] : [])) {
+    if (b.teleT == null || t < b.teleT || t > b.hitT + 80) continue;
+    if (b.tel.mark) {
       eg.fillStyle = "#ffd400"; eg.font = `bold ${Math.round(U * 0.9)}px -apple-system, sans-serif`; eg.textAlign = "center"; eg.textBaseline = "middle";
       eg.fillText("！", X(0.75), Y(-0.9));
     }
-    if (a.tel.ring) {
-      const k = clamp01((t - a.teleT) / Math.max(1, a.hitT - a.teleT)), R0 = Math.max(W, H) * 0.55, R1 = U * 0.18;
+    if (b.tel.ring) {
+      const k = clamp01((t - b.teleT) / Math.max(1, b.hitT - b.teleT)), R0 = Math.max(W, H) * 0.55, R1 = U * 0.18;
       eg.strokeStyle = "#ffd400"; eg.lineWidth = Math.max(4, U * 0.05);
       eg.beginPath(); eg.arc(X(0), Y(-0.1), lerp(R0, R1, k), 0, Math.PI * 2); eg.stroke();
     }
@@ -1091,6 +1139,8 @@ function noiseHit(vol = 0.5, ms = 120, f = 1800) {
   s.buffer = buf; s.connect(bp).connect(g).connect(ac.destination); s.start();
 }
 const teleSound = () => { beep(1568, 70, 0.5); setTimeout(() => beep(1568, 70, 0.5), 110); };
+// 反撃の合図（予告の音と聞き分けられるよう、低い→高いの2音）
+const counterSound = () => { beep(523, 90, 0.45); setTimeout(() => beep(1047, 140, 0.45), 100); };
 
 // ---- 1回の攻撃の時刻を決める ----
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -1111,6 +1161,31 @@ function planAttack(o, t0, type) {
   // 位置の基準は、動き出しか予告の早い方の直前に取る
   a.anchorT = Math.min(a.windupStart, a.teleT ?? Infinity) - 50;
   return a;
+}
+// 連撃（段階4）：命中から次の命中までの間隔を決め、2本目からは前の振り抜きから直接振りかぶる
+// 間隔が短すぎて振りかぶりが入らないときは、振りかぶりを縮める（最短60ms）。それでも足りなければ間隔のほうを延ばし、実際の間隔を記録する
+function planCombo(o, t0, types) {
+  const list = [planAttack(o, t0, types[0])];
+  const wind = +o["b-windup"];
+  for (let i = 1; i < types.length; i++) {
+    const prev = list[i - 1], a = planAttack(o, t0, types[i]);
+    const I = rnd(+o["b-intmin"], +o["b-intmax"]);
+    a.windupStart = prev.endT;
+    a.hitT = prev.hitT + I;
+    a.strikeStart = a.hitT - a.strikeMs;
+    a.windupEnd = a.windupStart + Math.max(60, Math.min(wind, (a.strikeStart - a.windupStart) * 0.7));
+    if (a.strikeStart < a.windupEnd) { a.strikeStart = a.windupEnd; a.hitT = a.strikeStart + a.strikeMs; }
+    a.endT = a.hitT + a.strikeMs * 0.8;
+    a.recoverEnd = a.endT + 700;
+    a.teleT = a.lead != null ? a.hitT - a.lead : null;
+    a.interval = Math.round(a.hitT - prev.hitT);
+    a.from = ATK[prev.type].end;
+    prev.last = false;
+    list.push(a);
+  }
+  list.at(-1).last = true;
+  list.forEach((a, i) => { a.comboIndex = i; a.comboLen = list.length; a.anchorT = list[0].anchorT; });
+  return list;
 }
 
 // ---- 回避の判定（記録したコマ列から） ----
@@ -1162,8 +1237,18 @@ function judgeAttack(tr, th, table, pre, post) {
   const dodge = [...inWin].sort((x, y) => ov(y) - ov(x))[0] || segs.find((s) => st(s) >= tr.windupStart - 200) || null;
   const ok1 = inWin.length > 0;
   const ok2 = inWin.some((s) => allowed(s.cls, table[tr.type]));
+  // 反撃の素振り（段階4）：最後の1本の窓のあと〜記録の終わりまでに拾った動き＝素振り中の誤検知。手の速さで素振りがあったかも見る
+  let counter = null;
+  if (tr.counter && tr.counterT != null) {
+    const c0 = tr.hitT + post + 100, c1 = tr.capEnd;
+    const fp = segs.filter((s) => st(s) >= c0 && st(s) <= c1);
+    const ih = (tr.fields || []).indexOf("hspd") + 1;
+    const sp = ih ? tr.frames.filter((f) => f[0] >= tr.counterT && f[0] <= c1).map((f) => f[ih]) : [];
+    const peak = sp.length ? Math.max(...sp) : null;
+    counter = { from: Math.round(c0), to: Math.round(c1), falsePos: fp.map((s) => s.cls), swing: peak != null && peak > (th.swing ?? 2.5), swingPeak: peak == null ? null : +peak.toFixed(2) };
+  }
   return {
-    segments: segs, dodge,
+    segments: segs, dodge, counterCheck: counter,
     success1: ok1, success2: ok2,
     reactFromTele: dodge && tr.teleT != null ? Math.round(st(dodge) - tr.teleT) : null,
     reactFromHit: dodge ? Math.round(st(dodge) - tr.hitT) : null,
@@ -1188,56 +1273,117 @@ async function runB(previewOnly = false) {
   document.body.classList.add("runB");
   const run = { id: (LOG.runs.at(-1)?.id || 0) + 1, kind: previewOnly ? "labB-preview" : "labB", startAt: iso(), n, mode, settings: o, sessionId: session?.id, calAt: CAL?.at };
   if (!previewOnly) { LOG.runs.push(run); logEvent("run_start", { runId: run.id, kind: "labB", n, mode }); }
-  // 種類は均等に、順番はランダム
-  const types = shuffle(Array.from({ length: n }, (_, i) => o.types[i % o.types.length]));
+  if (!previewOnly && o["b-kind"] === "idle") return runIdle(o, run);
+  // 種類は均等に、順番はランダム。連撃の数は設定どおり（混ぜるなら1〜4から毎回選ぶ）
+  const lens = Array.from({ length: n }, () => (o["b-combo"] === "mix" ? 1 + Math.floor(Math.random() * 4) : +o["b-combo"] || 1));
+  const types = shuffle(Array.from({ length: lens.reduce((s, x) => s + x, 0) }, (_, i) => o.types[i % o.types.length]));
+  const counterOn = o["b-counter"] === "1";
+  let ti = 0;
   try {
     if (!previewOnly) { await say(`ラボB。全部で${n}回です。構えて`); await sleep(2500); }
     for (let i = 0; i < n && !stopB; i++) {
-      const a = planAttack(o, now(), types[i]);
-      curAtk = a;
-      await sleepUntil(a.anchorT);
+      const combo = planCombo(o, now(), types.slice(ti, ti + lens[i])); ti += lens[i];
+      const first = combo[0], last = combo.at(-1);
+      curCombo = combo; curAtk = first;
+      const counterT = counterOn ? last.hitT + post + 250 : null;   // 反撃の合図
+      const capEnd = last.hitT + (counterOn ? 2400 : Math.max(post, 1200));
+      if (counterOn) last.recoverEnd = Math.max(last.recoverEnd, capEnd + 300);
+      await sleepUntil(first.anchorT);
       if (stopB) break;
       if (!previewOnly) {
         const an = avgRaw(now() - 500, now());
         if (an) { anchor = { ...an }; smooth = null; }
         capture = { frames: [] };
       }
-      if (a.teleT != null && a.tel.sound) setTimeout(teleSound, Math.max(0, a.teleT - now()));
-      setTimeout(() => noiseHit(0.6, 140, 1600), Math.max(0, a.hitT - now()));
-      a.capEnd = a.hitT + Math.max(post, 1200);
-      await sleepUntil(a.capEnd);
-      if (previewOnly) { await sleepUntil(a.recoverEnd); break; }
+      for (const a of combo) {
+        if (a.teleT != null && a.tel.sound) setTimeout(teleSound, Math.max(0, a.teleT - now()));
+        setTimeout(() => noiseHit(0.6, 140, 1600), Math.max(0, a.hitT - now()));
+      }
+      if (counterT != null) setTimeout(counterSound, Math.max(0, counterT - now()));
+      await sleepUntil(capEnd);
+      if (previewOnly) { await sleepUntil(last.recoverEnd); break; }
       const frames = capture?.frames || []; capture = null;
-      const tr = {
-        id: (LOG.trials.at(-1)?.id || 0) + 1, kind: "labB", runId: run.id, i, mode,
-        type: a.type, count: 1, speed: a.speed, strikeMs: a.strikeMs, tel: a.tel, lead: a.lead,
-        t: Math.round(a.anchorT), at: iso(a.anchorT),
-        windupStart: Math.round(a.windupStart), strikeStart: Math.round(a.strikeStart), teleT: a.teleT == null ? null : Math.round(a.teleT),
-        hitT: Math.round(a.hitT), anchorT: Math.round(a.anchorT), capEnd: Math.round(a.capEnd),
-        windowPre: pre, windowPost: post, table: table[a.type] || [],
-        fps: shown.poseFps, inferMs: shown.inferMs, thresholds: { ...TH },
-        enemy: { size: +o["b-size"], contrast: +o["b-contrast"], posx: +o["b-posx"], posy: +o["b-posy"] },
-        fields: FIELDS, frames,
-      };
-      Object.assign(tr, judgeAttack(tr, TH, table, pre, post));
-      LOG.trials.push(tr); saveLogSoon();
-      // 結果の音と文字（モード3は判定しないので、動きを拾ったかだけ短く知らせる）
-      const ok = mode === "1" ? tr.success1 : mode === "2" ? tr.success2 : null;
+      const comboId = `${run.id}-${i}`;
+      const made = [];
+      combo.forEach((a, k) => {
+        // 1本ごとに1試行。窓の前は、前の1本の命中＋post より前に広げない（前の1本の回避を数えないため）
+        const preK = k === 0 ? pre : Math.max(100, Math.min(pre, a.interval - post));
+        const isLast = k === combo.length - 1;
+        const s0 = k === 0 ? first.anchorT : combo[k - 1].hitT + post, s1 = isLast ? capEnd : Math.min(capEnd, a.hitT + 1200);
+        const tr = {
+          id: (LOG.trials.at(-1)?.id || 0) + 1, kind: "labB", runId: run.id, i, mode,
+          type: a.type, count: a.comboLen, comboId, comboIndex: a.comboIndex, comboLen: a.comboLen, interval: a.interval ?? null,
+          speed: a.speed, strikeMs: a.strikeMs, tel: a.tel, lead: a.lead,
+          t: Math.round(s0), at: iso(s0),
+          windupStart: Math.round(a.windupStart), strikeStart: Math.round(a.strikeStart), teleT: a.teleT == null ? null : Math.round(a.teleT),
+          hitT: Math.round(a.hitT), anchorT: Math.round(s0), capEnd: Math.round(s1),
+          counter: counterOn && isLast, counterT: counterOn && isLast ? Math.round(counterT) : null,
+          windowPre: preK, windowPost: post, table: table[a.type] || [],
+          fps: shown.poseFps, inferMs: shown.inferMs, thresholds: { ...TH },
+          enemy: { size: +o["b-size"], contrast: +o["b-contrast"], posx: +o["b-posx"], posy: +o["b-posy"] },
+          fields: FIELDS, frames: frames.filter((f) => f[0] >= s0 - 600 && f[0] <= s1),
+        };
+        Object.assign(tr, judgeAttack(tr, TH, table, preK, post));
+        // 連撃で、前の1本と同じ1つの動き（しゃがんだまま等）でよけたか
+        if (k > 0 && tr.dodge && made[k - 1].dodge) tr.sameMove = tr.dodge.cls === made[k - 1].dodge.cls && (tr.dodge.onset ?? tr.dodge.start) <= made[k - 1].hitT;
+        LOG.trials.push(tr); made.push(tr);
+      });
+      saveLogSoon();
+      // 結果の音と文字（連撃は全部よけたら成功。モード3は判定しないので、動きを拾ったかだけ短く知らせる）
+      const okOf = (t) => (mode === "1" ? t.success1 : mode === "2" ? t.success2 : null);
+      const ok = mode === "3" ? null : made.every(okOf);
+      const nOk = made.filter(okOf).length;
       if (o["b-fb"] === "1") {
         if (ok === true) { beep(1300, 90); setTimeout(() => beep(1700, 120), 110); }
         else if (ok === false) beep(220, 350);
-        else beep(tr.dodge ? 900 : 500, 80);
+        else beep(made.some((t) => t.dodge) ? 900 : 500, 80);
       }
-      flash = ok === true ? { text: "回避", color: "#5fd18a", until: now() + 700 } : ok === false ? { text: "被弾", color: "#e8664f", until: now() + 700 }
-        : { text: tr.dodge ? CLASSES[tr.dodge.cls].name : "動きなし", color: "#ddd", until: now() + 700 };
-      await sleepUntil(a.recoverEnd + 300);
+      flash = ok === true ? { text: made.length > 1 ? `全部回避 ${nOk}/${made.length}` : "回避", color: "#5fd18a", until: now() + 900 }
+        : ok === false ? { text: made.length > 1 ? `被弾 回避${nOk}/${made.length}` : "被弾", color: "#e8664f", until: now() + 900 }
+        : { text: made.map((t) => (t.dodge ? CLASSES[t.dodge.cls].name : "なし")).join("・"), color: "#ddd", until: now() + 900 };
+      await sleepUntil(last.recoverEnd + 300);
     }
     if (!previewOnly && !stopB) { beep(800, 120); await say("ラボBを終わります"); }
   } finally {
-    capture = null; curAtk = null; busyB = false; busy = false;
+    capture = null; curAtk = null; curCombo = null; busyB = false; busy = false;
     document.body.classList.remove("runB");
     anchor = CAL ? { ...CAL } : null; smooth = null;
     if (!previewOnly) { run.endAt = iso(); logEvent("run_end", { runId: run.id, stopped: stopB }); saveLogNow(); showResultB(); }
+  }
+}
+// 攻撃なし（誤検知の試験・段階4）：敵は構えたまま。プレイヤーは構え直したり動いたりする。
+// 本番では攻撃のたびに位置の基準を取り直すので、ここでも4秒ごとに取り直す（その時点の直前0.5秒）。拾った動きはすべて誤検知
+async function runIdle(o, run) {
+  const sec = Math.max(10, +o["b-idlesec"] || 60);
+  try {
+    await say(`攻撃なしの試験、${sec}秒です。構え直したり、素振りをしたり、普段どおり動いてください。よける動きはしないでください`);
+    await sleep(1500); beep(1000, 120);
+    const t0 = now(), end = t0 + sec * 1000, anchors = [];
+    const an0 = avgRaw(now() - 500, now()); if (an0) { anchor = { ...an0 }; smooth = null; }
+    capture = { frames: [] };
+    let nextA = t0 + 4000;
+    while (now() < end && !stopB) {
+      await sleep(100);
+      if (now() >= nextA) { const an = avgRaw(now() - 500, now()); if (an) { anchor = { ...an }; smooth = null; anchors.push(Math.round(now())); } nextA += 4000; }
+    }
+    const frames = capture?.frames || []; capture = null;
+    const t1 = now();
+    // 取り直しの直後は指標が跳ぶので、区切りごとに分けて動きを拾う
+    const cuts = [Math.round(t0), ...anchors, Math.round(t1)], segs = [];
+    for (let k = 0; k + 1 < cuts.length; k++) segs.push(...segmentsOf(frames, FIELDS, cuts[k], cuts[k + 1], TH));
+    const tr = {
+      id: (LOG.trials.at(-1)?.id || 0) + 1, kind: "labB-idle", runId: run.id, i: 0,
+      t: Math.round(t0), at: iso(t0), anchorT: Math.round(t0), capEnd: Math.round(t1), durationMs: Math.round(t1 - t0), anchors,
+      falsePos: segs, fps: shown.poseFps, inferMs: shown.inferMs, thresholds: { ...TH },
+      fields: FIELDS, frames: frames.filter((_, i) => i % 2 === 0),   // 長いので1コマおきに残す（タイムライン用）
+    };
+    LOG.trials.push(tr); saveLogSoon();
+    beep(800, 120); await say(`終わります。拾った動きは${segs.length}回でした`);
+  } finally {
+    capture = null; curAtk = null; curCombo = null; busyB = false; busy = false;
+    document.body.classList.remove("runB");
+    anchor = CAL ? { ...CAL } : null; smooth = null;
+    run.endAt = iso(); logEvent("run_end", { runId: run.id, stopped: stopB, kind: "idle" }); saveLogNow(); showResultB();
   }
 }
 $("btn-runB").onclick = () => runB(false);
@@ -1293,7 +1439,7 @@ $("b-result-btn").onclick = showResultB;
 $("b-scope").onchange = showResultB;
 function summaryB(lines) {
   const ts = rejudgeB(LOG.trials.filter((t) => t.kind === "labB"));
-  if (!ts.length) return;
+  if (!ts.length) { summaryQ6([], lines); return; }
   const r = analyzeB(ts);
   lines.push("## ラボB（今の閾値・正解表で再判定）", `正解表 ${JSON.stringify(bTable())}`);
   const modes = {}; for (const t of ts) modes[t.mode] = (modes[t.mode] || 0) + 1;
@@ -1312,6 +1458,48 @@ function summaryB(lines) {
   if (ons.length) lines.push(`命中→動きの始まり 中央${q(rh, 0.5)}ms / 命中→閾値を越えた 中央${q(cr, 0.5) ?? "-"}ms（差＝判定の遅れ）`);
   const s = ts.map((t) => t.dodge?.size).filter((x) => x != null);
   if (s.length) lines.push(`動きの大きさ（主な指標のピーク） 中央${q(s.map(Math.abs), 0.5)}`);
+  summaryQ6(ts, lines);
+}
+// Q6 単発と連撃・誤検知（段階4）
+function summaryQ6(ts, lines) {
+  const multi = ts.filter((t) => (t.comboLen || 1) > 1);
+  if (multi.length) {
+    lines.push("Q6 連撃（何本目か / 回 / 成功1 / 成功2 / 命中→動き 中央 / 前の1本と同じ動きのまま）");
+    const single = ts.filter((t) => (t.comboLen || 1) === 1);
+    if (single.length) lines.push(`- 単発: ${single.length} / ${pct(single.filter((t) => t.success1).length, single.length)} / ${pct(single.filter((t) => t.success2).length, single.length)} / ${q(single.filter((t) => t.dodge).map((t) => t.reactFromHit), 0.5) ?? "-"}`);
+    for (let k = 0; k < 4; k++) {
+      const xs = multi.filter((t) => t.comboIndex === k); if (!xs.length) continue;
+      lines.push(`- 連撃${k + 1}本目: ${xs.length} / ${pct(xs.filter((t) => t.success1).length, xs.length)} / ${pct(xs.filter((t) => t.success2).length, xs.length)} / ${q(xs.filter((t) => t.dodge).map((t) => t.reactFromHit), 0.5) ?? "-"} / ${k ? pct(xs.filter((t) => t.sameMove).length, xs.length) : "-"}`);
+    }
+    // 連撃を全部よけられた割合（連撃の長さ別）
+    const combos = {};
+    for (const t of multi) { combos[t.comboId] ||= { len: t.comboLen, ok1: true, ok2: true, iv: [] }; const c = combos[t.comboId]; c.ok1 &&= t.success1; c.ok2 &&= t.success2; if (t.interval) c.iv.push(t.interval); }
+    const byLen = {};
+    for (const c of Object.values(combos)) { byLen[c.len] ||= { n: 0, ok1: 0, ok2: 0 }; byLen[c.len].n++; if (c.ok1) byLen[c.len].ok1++; if (c.ok2) byLen[c.len].ok2++; }
+    lines.push(`連撃を全部よけた割合（成功1/成功2）: ${Object.entries(byLen).map(([L, x]) => `${L}連撃 ${x.n}回 ${pct(x.ok1, x.n)}/${pct(x.ok2, x.n)}`).join("、")}`);
+    // 間隔ごとの2本目以降の成功
+    const ivBins = [[0, 700], [700, 900], [900, 1100], [1100, 9999]];
+    lines.push(`間隔ごと（2本目以降の成功1）: ${ivBins.map(([a, b]) => { const xs = multi.filter((t) => t.interval != null && t.interval >= a && t.interval < b); return xs.length ? `${a}〜${b > 5000 ? "" : b}ms ${pct(xs.filter((t) => t.success1).length, xs.length)}（${xs.length}）` : null; }).filter(Boolean).join("、")}`);
+  }
+  const cs = ts.filter((t) => t.counterCheck);
+  if (cs.length) {
+    const fp = cs.flatMap((t) => t.counterCheck.falsePos), cnt = {};
+    for (const c of fp) cnt[c] = (cnt[c] || 0) + 1;
+    lines.push(`反撃の素振り: ${cs.length}回 素振りを拾えた ${pct(cs.filter((t) => t.counterCheck.swing).length, cs.length)}（手の速さのピーク中央 ${q(cs.map((t) => t.counterCheck.swingPeak ?? 0), 0.5)}） 素振り中に回避と誤検知 ${pct(cs.filter((t) => t.counterCheck.falsePos.length).length, cs.length)}（${Object.entries(cnt).map(([c, n]) => `${CLASSES[c].name}${n}`).join(" ") || "なし"}）`);
+  }
+  const idle = LOG.trials.filter((t) => t.kind === "labB-idle").map((t) => ({ ...t, falsePos: rejudgeIdle(t) }));
+  if (idle.length) {
+    const min = idle.reduce((s, t) => s + t.durationMs, 0) / 60000, cnt = {};
+    for (const t of idle) for (const s of t.falsePos) cnt[s.cls] = (cnt[s.cls] || 0) + 1;
+    const n = idle.reduce((s, t) => s + t.falsePos.length, 0);
+    lines.push(`攻撃なし（誤検知）: ${min.toFixed(1)}分で${n}回＝1分あたり${(n / Math.max(0.01, min)).toFixed(1)}回（${Object.entries(cnt).map(([c, k]) => `${CLASSES[c].name}${k}`).join(" ") || "なし"}）`);
+  }
+}
+// 攻撃なしの記録を、今の閾値で拾い直す（基準を取り直した区切りごと）
+function rejudgeIdle(t) {
+  const cuts = [t.anchorT, ...(t.anchors || []), t.capEnd], segs = [];
+  for (let k = 0; k + 1 < cuts.length; k++) segs.push(...segmentsOf(t.frames, t.fields, cuts[k], cuts[k + 1], TH));
+  return segs;
 }
 
 // ---------- メニュー ----------
@@ -1319,7 +1507,7 @@ document.querySelectorAll("nav button").forEach((b) => b.onclick = () => {
   document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("on", x === b));
   for (const m of ["A", "B", "C"]) $("p-" + m).hidden = m !== b.dataset.mode;
   document.body.classList.toggle("modeB", b.dataset.mode === "B");
-  if (b.dataset.mode === "C") refreshSummary();
+  if (b.dataset.mode === "C") { refreshSummary(); buildList(); }
   logEvent("mode", { mode: b.dataset.mode });
 });
 
@@ -1402,11 +1590,127 @@ $("btn-dl-json").onclick = () => download(`dodgelab_${Date.now()}.json`, JSON.st
 $("btn-clear").onclick = () => {
   if (!confirm("このブラウザに残っているラボのログを消します（基準と閾値は残します）。よろしいですか？")) return;
   LOG = newLog(); try { localStorage.removeItem(LOG_KEY); } catch {}
-  logEvent("log_cleared"); refreshSummary();
+  logEvent("log_cleared"); refreshSummary(); buildList();
 };
 
+// ---------- ラボC：一覧・タイムライン・CSV（段階4） ----------
+// どれも「今の閾値・正解表で判定し直した」値を出す
+function judged(kind) {
+  const ts = LOG.trials.filter((t) => t.kind === kind);
+  if (kind === "labB") return rejudgeB(ts);
+  if (kind === "labA") return rejudge(ts);
+  if (kind === "labB-idle") return ts.map((t) => ({ ...t, falsePos: rejudgeIdle(t) }));
+  return ts;
+}
+const nm = (c) => (c ? CLASSES[c]?.name || c : "—");
+function buildList() {
+  const kind = $("c-kind").value, all = judged(kind);
+  const runs = [...new Set(all.map((t) => t.runId))];
+  const sel = $("c-run"), keep = sel.value;
+  sel.innerHTML = `<option value="all">すべて</option>` + runs.map((r) => `<option value="${r}">${r}</option>`).join("");
+  sel.value = runs.map(String).includes(keep) ? keep : runs.length ? String(runs.at(-1)) : "all";
+  const ts = sel.value === "all" ? all : all.filter((t) => String(t.runId) === sel.value);
+  let h;
+  if (kind === "labB") {
+    h = "<tr><th>#</th><th>攻撃</th><th>連撃</th><th>速さ</th><th>予告</th><th>拾った動き</th><th>命中→動き</th><th>成功1</th><th>成功2</th><th>反撃中の誤検知</th></tr>";
+    for (const t of ts) h += `<tr data-id="${t.id}"><td>${t.id}</td><td>${ATK[t.type]?.name}</td><td>${(t.comboLen || 1) > 1 ? `${t.comboIndex + 1}/${t.comboLen}` : "単発"}</td><td>${spName(t.speed)}</td><td>${telKey(t)}</td><td>${nm(t.dodge?.cls)}</td><td>${t.reactFromHit ?? "—"}</td><td>${t.success1 ? "○" : "×"}</td><td>${t.success2 ? "○" : "×"}</td><td>${t.counterCheck ? (t.counterCheck.falsePos.map(nm).join("・") || "なし") + (t.counterCheck.swing ? "" : "（素振りなし?）") : ""}</td></tr>`;
+  } else if (kind === "labA") {
+    h = "<tr><th>#</th><th>指示</th><th>判定</th><th>正誤</th><th>読み上げ開始→判定</th></tr>";
+    for (const t of ts) h += `<tr data-id="${t.id}"><td>${t.id}</td><td>${t.backCm != null ? `下がり${t.backCm}cm` : nm(t.label)}</td><td>${nm(t.pred)}</td><td>${t.correct ? "○" : "×"}</td><td>${t.onsetMs ?? "—"}</td></tr>`;
+  } else {
+    h = "<tr><th>#</th><th>長さ 秒</th><th>拾った動き（誤検知）</th></tr>";
+    for (const t of ts) h += `<tr data-id="${t.id}"><td>${t.id}</td><td>${(t.durationMs / 1000).toFixed(0)}</td><td>${t.falsePos.map((s) => nm(s.cls)).join("・") || "なし"}</td></tr>`;
+  }
+  $("c-list").innerHTML = h;
+  $("c-list").querySelectorAll("tr[data-id]").forEach((tr) => tr.onclick = () => {
+    $("c-list").querySelectorAll("tr").forEach((x) => (x.style.background = ""));
+    tr.style.background = "#2a2a10";
+    drawTimeline(ts.find((t) => String(t.id) === tr.dataset.id));
+  });
+}
+$("c-kind").onchange = buildList;
+$("c-run").onchange = buildList;
+
+// タイムライン：上＝出来事（振りかぶり・予告・命中・窓）、中＝拾った動き、下＝指標（閾値を1とした比）
+const TL_TRACES = [
+  ["drop", (th) => th.crouch, "#ff8f6b", "沈み"], ["hipShift", (th) => th.step, "#5fd18a", "腰の横ずれ"], ["swDrop", (th) => th.hanmiSw, "#f2c14e", "肩幅の縮み"],
+  ["leanX", (th) => th.leanX, "#ff6bd5", "横倒し"], ["leanZ", (th) => th.sway, "#d9a0ff", "前後"], ["back", (th) => th.back, "#c58bff", "下がり"],
+  ["gap", (th) => th.guardGapMin, "#7cc7ff", "両手の間"], ["hspd", (th) => th.swing, "#aaaaaa", "手の速さ"],
+];
+function drawTimeline(t) {
+  const c = $("c-tl"), g = c.getContext("2d"), W = c.width, H = c.height;
+  g.fillStyle = "#0b0b0b"; g.fillRect(0, 0, W, H);
+  if (!t) return;
+  const t0 = t.kind === "labA" ? t.sayT - 600 : t.anchorT, t1 = t.kind === "labA" ? t.winEnd : t.capEnd;
+  const L = 8, R = W - 8, X = (x) => L + ((x - t0) / Math.max(1, t1 - t0)) * (R - L);
+  g.font = "12px -apple-system, sans-serif"; g.textBaseline = "top";
+  // 目盛り（0.5秒ごと）
+  g.strokeStyle = "#222"; g.fillStyle = "#666";
+  for (let s = Math.ceil(t0 / 500) * 500; s <= t1; s += 500) { g.beginPath(); g.moveTo(X(s), 0); g.lineTo(X(s), H); g.stroke(); }
+  const mark = (x, col, label, y = 2) => { if (x == null) return; g.strokeStyle = col; g.lineWidth = 2; g.beginPath(); g.moveTo(X(x), 0); g.lineTo(X(x), H); g.stroke(); g.lineWidth = 1; g.fillStyle = col; g.fillText(label, X(x) + 2, y); };
+  let segs = [];
+  if (t.kind === "labB") {
+    g.fillStyle = "rgba(95,209,138,.12)"; g.fillRect(X(t.hitT - t.windowPre), 0, X(t.hitT + t.windowPost) - X(t.hitT - t.windowPre), H);
+    mark(t.windupStart, "#666", "振りかぶり", 2); mark(t.strikeStart, "#999", "振り", 16); mark(t.teleT, "#ffd400", "予告", 30); mark(t.hitT, "#e8664f", "命中", 44);
+    if (t.counterT) mark(t.counterT, "#7cc7ff", "反撃の合図", 58);
+    segs = t.segments || [];
+    $("c-tl-cap").textContent = `#${t.id} ${ATK[t.type]?.name}${(t.comboLen || 1) > 1 ? ` 連撃${t.comboIndex + 1}/${t.comboLen}` : ""}・${spName(t.speed)}・${telKey(t)}　拾った動き：${nm(t.dodge?.cls)}（命中→動き ${t.reactFromHit ?? "—"}ms）　成功1 ${t.success1 ? "○" : "×"} 成功2 ${t.success2 ? "○" : "×"}　緑の帯＝判定の窓`;
+  } else if (t.kind === "labA") {
+    mark(t.sayT, "#ffd400", "読み上げ", 2); if (t.sayEnd) mark(t.sayEnd, "#aa8", "読み終わり", 16);
+    segs = segmentsOf(t.frames, t.fields, t.sayT, t.winEnd, TH);
+    $("c-tl-cap").textContent = `#${t.id} 指示：${t.backCm != null ? `下がり${t.backCm}cm` : nm(t.label)}　判定：${nm(t.pred)}`;
+  } else {
+    (t.anchors || []).forEach((a) => mark(a, "#444", "基準", 2));
+    segs = t.falsePos || [];
+    $("c-tl-cap").textContent = `#${t.id} 攻撃なし ${(t.durationMs / 1000).toFixed(0)}秒　拾った動き ${segs.length}回（灰色の線＝基準の取り直し）`;
+  }
+  // 拾った動き（薄い部分＝動きの始まり〜閾値を越えるまで）
+  const yS = 76, hS = 26;
+  for (const s of segs) {
+    const col = CLASSES[s.cls]?.color || "#ddd";
+    g.globalAlpha = 0.35; g.fillStyle = col; g.fillRect(X(s.onset ?? s.start), yS, X(s.start) - X(s.onset ?? s.start), hS);
+    g.globalAlpha = 0.9; g.fillRect(X(s.start), yS, Math.max(2, X(s.end) - X(s.start)), hS);
+    g.globalAlpha = 1; g.fillStyle = "#000"; g.fillText(nm(s.cls), X(s.start) + 3, yS + 6);
+  }
+  // 指標（閾値を1とした比。上の点線が閾値）
+  const yT = 112, hT = H - yT - 18, Y = (v) => yT + hT - Math.max(0, Math.min(1.6, v)) / 1.6 * hT;
+  g.strokeStyle = "#a33"; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(L, Y(1)); g.lineTo(R, Y(1)); g.stroke(); g.setLineDash([]);
+  const idx = Object.fromEntries((t.fields || []).map((k, i) => [k, i + 1]));
+  let lx = L;
+  for (const [k, thf, col, label] of TL_TRACES) {
+    if (!idx[k]) continue;
+    const thr = thf(TH) || 1;
+    g.strokeStyle = col; g.lineWidth = 1.5; g.beginPath();
+    let first = true;
+    for (const f of t.frames) { if (f[0] < t0 || f[0] > t1) continue; const v = Math.abs(f[idx[k]] ?? 0) / thr; if (first) { g.moveTo(X(f[0]), Y(v)); first = false; } else g.lineTo(X(f[0]), Y(v)); }
+    g.stroke(); g.lineWidth = 1;
+    g.fillStyle = col; g.fillText(label, lx, H - 14); lx += g.measureText(label).width + 10;
+  }
+}
+
+// CSV：1試行1行。値は今の閾値・正解表で判定し直したもの
+function csvOf() {
+  const cols = ["id", "kind", "runId", "at", "mode", "type_or_label", "comboIndex", "comboLen", "interval", "speed", "strikeMs", "telegraph", "lead", "teleT", "hitT",
+    "pred_or_dodge", "dodgeOnset", "reactFromTele", "reactFromHit", "crossFromHit", "success1", "success2", "correct", "sameMove", "counter", "counterSwing", "counterFalsePos",
+    "falsePosCount", "durationMs", "fps", "inferMs", "thresholds"];
+  const rows = [cols.join(",")];
+  const esc = (v) => { if (v == null) return ""; const s = typeof v === "object" ? JSON.stringify(v) : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+  for (const kind of ["labA", "labB", "labB-idle"]) for (const t of judged(kind)) {
+    const r = {
+      id: t.id, kind: t.kind, runId: t.runId, at: t.at, mode: t.mode, type_or_label: t.type ?? (t.backCm != null ? `back${t.backCm}cm` : t.label),
+      comboIndex: t.comboIndex, comboLen: t.comboLen, interval: t.interval, speed: t.speed, strikeMs: t.strikeMs, telegraph: t.tel ? telKey(t) : "", lead: t.lead, teleT: t.teleT, hitT: t.hitT,
+      pred_or_dodge: t.dodge?.cls ?? t.pred, dodgeOnset: t.dodge?.onset, reactFromTele: t.reactFromTele, reactFromHit: t.reactFromHit, crossFromHit: t.crossFromHit,
+      success1: t.success1, success2: t.success2, correct: t.correct, sameMove: t.sameMove, counter: t.counter, counterSwing: t.counterCheck?.swing, counterFalsePos: t.counterCheck?.falsePos?.join("|"),
+      falsePosCount: t.falsePos?.length, durationMs: t.durationMs, fps: t.fps, inferMs: t.inferMs, thresholds: TH,
+    };
+    rows.push(cols.map((k) => esc(r[k])).join(","));
+  }
+  return "﻿" + rows.join("\n");   // Excel で文字化けしないよう BOM を付ける
+}
+$("btn-dl-csv").onclick = () => download(`dodgelab_${Date.now()}.csv`, csvOf(), "text/csv");
+
 document.addEventListener("visibilitychange", () => logEvent(document.hidden ? "hidden" : "visible"));
-window.__lab = { get LOG() { return LOG; }, classify, judgeFrames, get TH() { return TH; }, onPose, get curAtk() { return curAtk; } }; // 確認用
+window.__lab = { get LOG() { return LOG; }, classify, judgeFrames, get TH() { return TH; }, onPose, get curAtk() { return curAtk; }, get curCombo() { return curCombo; }, csvOf: () => csvOf() }; // 確認用
 </script>
 </body>
 </html>

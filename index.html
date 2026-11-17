@@ -944,7 +944,16 @@ const ATK = {
 };
 const KAMAE = { hx: 0.05, hy: 0.1, th: 15, len: 0.45, sc: 1 };
 const ATK_IDS = Object.keys(ATK);
-const TABLE_DEFAULT = { kesa: ["hanmi"], gyaku: ["hanmi"], yoko: ["crouch", "back"], karatake: ["hanmi"], tsuki: ["hanmi", "back"] };
+// 正解表 v2（ラボBの実機でヒデキが本能でよけた形に合わせた。軌道に直角に、軌道の外側へ動く。突きは刀で受ける）
+//   横薙ぎ→しゃがみ6/6、唐竹→横へステップ5/6、袈裟→自分の左・下へ6/6、逆袈裟→自分の右・下へ6/6、突き→刀で受ける4/6・しゃがみ2/6
+const TABLE_OLD = { kesa: ["hanmi"], gyaku: ["hanmi"], yoko: ["crouch", "back"], karatake: ["hanmi"], tsuki: ["hanmi", "back"] };
+const TABLE_DEFAULT = {
+  kesa: ["hanmiL", "stepL", "leanL", "leanF", "crouch"],
+  gyaku: ["hanmiR", "stepR", "leanR", "leanF", "crouch"],
+  yoko: ["crouch", "back"],
+  karatake: ["step", "leanL", "leanR"],
+  tsuki: ["guard", "crouch", "hanmi", "back"],
+};
 const BSET_KEY = "dodgelab.labB.v1";
 
 // ---- 設定の保存と読み込み ----
@@ -968,6 +977,8 @@ function bLoad() {
   if (o) {
     for (const id of B_INPUTS) { const el = $(id); if (o[id] == null) continue; if (el.type === "checkbox") el.checked = o[id]; else el.value = o[id]; }
     if (o.types) $("b-types").querySelectorAll("input").forEach((x) => (x.checked = o.types.includes(x.value)));
+    // 保存されている正解表が古い初期値のままなら、新しい初期値に置き換える（手で直した表はそのまま）
+    try { if (JSON.stringify(JSON.parse($("b-table").value)) === JSON.stringify(TABLE_OLD)) $("b-table").value = JSON.stringify(TABLE_DEFAULT, null, 1); } catch {}
   }
   for (const k of ["lead", "size", "contrast", "posy", "posx"]) $(`b-${k}-v`).textContent = $(`b-${k}`).value;
   document.body.classList.toggle("camHide", $("b-cam").value === "0");

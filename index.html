@@ -57,6 +57,7 @@
   <button data-mode="A" class="on">ラボA 姿勢</button>
   <button data-mode="B">ラボB 攻撃</button>
   <button data-mode="C">ラボC ログ</button>
+  <span id="ver" style="align-self:center;font-size:10px;color:#888;white-space:nowrap">版 読込中</span>
 </nav>
 
 <div id="stage">
@@ -239,6 +240,8 @@ const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
   full: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
 };
+// 版の番号（画面の右上と要約に出す。キャッシュで古いページが出ていないかの確かめ用）
+const VERSION = "2026-11-18c";
 const LOG_KEY = "dodgelab.log.v1", TH_KEY = "dodgelab.th.v4", CAL_KEY = "dodgelab.cal.v3"; // 指標を足したので基準は取り直し
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -277,12 +280,16 @@ const idb = {
   get(k) { return new Promise((res) => { try { const r = this.db.transaction("kv").objectStore("kv").get(k); r.onsuccess = () => res(r.result); r.onerror = () => res(undefined); } catch { res(undefined); } }); },
   put(k, v) { return new Promise((res) => { try { const tx = this.db.transaction("kv", "readwrite"); tx.objectStore("kv").put(v, k); tx.oncomplete = () => res(true); tx.onerror = () => res(false); } catch { res(false); } }); },
 };
-const useIdb = await idb.open();
-let LOG = useIdb ? await idb.get(LOG_KEY) : undefined;
+// iPhone で IndexedDB が応答しないと、ページ全体が止まってしまうので、2秒で諦めて localStorage に戻す
+const within = (p, ms, v) => Promise.race([p, new Promise((r) => setTimeout(() => r(v), ms))]);
+const useIdb = await within(idb.open(), 2000, false);
+let LOG = useIdb ? await within(idb.get(LOG_KEY), 3000, undefined) : undefined;
 if (!LOG) { try { LOG = JSON.parse(localStorage.getItem(LOG_KEY)); } catch {} }
 if (LOG && useIdb) { await idb.put(LOG_KEY, LOG); try { localStorage.removeItem(LOG_KEY); } catch {} }
 LOG ||= newLog();
 LOG.calibrations ||= []; LOG.runs ||= []; LOG.trials ||= [];
+// ここまで来れば、ページの準備ができている（「版 読込中」のままなら、ここより前で止まっている）
+document.getElementById("ver").textContent = `版 ${VERSION}`;
 const T0 = performance.now(), T0wall = Date.now();
 const now = () => performance.now();
 const iso = (t = now()) => new Date(T0wall + (t - T0)).toISOString();
@@ -1637,9 +1644,9 @@ function summaryQ6(ts, lines) {
     const win = 1.15, rate = n / Math.max(0.01, min) / 60;
     lines.push(`  → 窓${win}秒の中に誤検知が入る見込み ${Math.round(100 * (1 - Math.exp(-rate * win)))}%`);
   }
-  swingMaskCompare(lines);
-  thresholdSweep(lines);
-  stage5Summary(ts, lines);
+  for (const [name, fn] of [["素振りの比較", () => swingMaskCompare(lines)], ["総当たり", () => thresholdSweep(lines)], ["段階5", () => stage5Summary(ts, lines)]]) {
+    try { fn(); } catch (e) { lines.push(`（${name}の要約でエラー: ${e.message} ${(e.stack || "").split("\n")[1] || ""}）`); }
+  }
 }
 // 段階5（A）：素振りの検出・素振りの間は回避を数えない・弾き。本編と同じ作りの素振り検出を記録した試行（hs3あり）だけで見る
 function stage5Summary(tsB, lines) {
@@ -1757,7 +1764,7 @@ function stats(arr) {
 }
 function refreshSummary() {
   const d = LOG.device, lines = [];
-  lines.push("# 回避判定ラボ 要約", `作成 ${new Date().toISOString()}`, `端末 ${d.ua}`, `画面 ${d.screen.w}x${d.screen.h} dpr${d.screen.dpr} / CPU ${d.hw ?? "?"}`);
+  lines.push("# 回避判定ラボ 要約", `作成 ${new Date().toISOString()}　版 ${VERSION}　ログの置き場所 ${useIdb ? "IndexedDB" : "localStorage"}`, `端末 ${d.ua}`, `画面 ${d.screen.w}x${d.screen.h} dpr${d.screen.dpr} / CPU ${d.hw ?? "?"}`);
   for (const s of LOG.sessions) {
     const p = LOG.perf.filter((x) => x.sessionId === s.id && x.poseFps > 0);
     const pf = stats(p.map((x) => x.poseFps)), cf = stats(p.map((x) => x.camFps)), im = stats(p.map((x) => x.inferMs));
@@ -1770,6 +1777,8 @@ function refreshSummary() {
     const sp = stats(p.filter((x) => x.speaking === true).map((x) => x.poseFps)), ns = stats(p.filter((x) => x.speaking === false).map((x) => x.poseFps));
     if (sp && ns) lines.push(`骨格FPS 読み上げ中 中央${sp.med}（10%点 ${sp.p10}、${sp.n}秒） / 読み上げなし 中央${ns.med}（10%点 ${ns.p10}、${ns.n}秒）`);
   }
+  // 要約のどこかでエラーが出ても、残りとコピーは続ける（エラーは文中に書く）
+  try {
   // ラボA（Q1〜Q3）。今の閾値で再判定した値
   const ts = rejudge(LOG.trials.filter((t) => t.kind === "labA"));
   if (ts.length) {
@@ -1808,13 +1817,14 @@ function refreshSummary() {
       lines.push(`検知率80%以上の最小の後退: ${ok.length ? ok[0] + "cm" : "なし"}`);
     }
   }
-  summaryB(lines);
+  } catch (e) { lines.push(`（ラボAの要約でエラー: ${e.message}）`); }
+  try { summaryB(lines); } catch (e) { lines.push(`（ラボBの要約でエラー: ${e.message} ${(e.stack || "").split("\n")[1] || ""}）`); }
   lines.push(`試行 合計${LOG.trials.length}件`);
   $("summary").value = lines.join("\n");
 }
 $("btn-refresh").onclick = refreshSummary;
 $("btn-copy").onclick = async () => {
-  refreshSummary();
+  try { refreshSummary(); } catch (e) { $("summary").value = `（要約でエラー: ${e.message}）\n` + $("summary").value; }
   try { await navigator.clipboard.writeText($("summary").value); $("btn-copy").textContent = "コピーしました"; }
   catch { $("summary").select(); document.execCommand("copy"); $("btn-copy").textContent = "コピーしました"; }
   setTimeout(() => ($("btn-copy").textContent = "要約をコピー"), 1500);

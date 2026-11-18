@@ -1506,6 +1506,24 @@ function summaryQ6(ts, lines) {
     lines.push(`  → 窓${win}秒の中に誤検知が入る見込み ${Math.round(100 * (1 - Math.exp(-rate * win)))}%`);
   }
   swingMaskCompare(lines);
+  thresholdSweep(lines);
+}
+// 閾値を何倍か厳しくする × 動きが続く時間を長く求める、の総当たり（記録済みのデータを判定し直すだけ）
+// 本物の回避（攻撃の成功）を落とさずに、攻撃なし・反撃中の誤検知をどこまで減らせるかを見る
+function thresholdSweep(lines) {
+  const atk = LOG.trials.filter((t) => t.kind === "labB");
+  const idle = LOG.trials.filter((t) => t.kind === "labB-idle");
+  if (!atk.length || !idle.length) return;
+  const KEYS = ["crouch", "step", "hanmiZ", "hanmiSw", "leanX", "sway", "back", "guardGapMin"];
+  const min = idle.reduce((s, t) => s + t.durationMs, 0) / 60000;
+  lines.push("閾値の総当たり（倍率×続いた時間 → 攻撃 成功1/成功2 / 反撃中の誤検知 / 攻撃なし 1分あたり・窓に入る見込み）");
+  for (const hold of [150, 300, 450]) for (const k of [1, 1.3, 1.6, 2]) {
+    const th = { ...TH, holdMs: hold };
+    for (const key of KEYS) th[key] = TH[key] * k;
+    const a = rejudgeB(atk, th), c = a.filter((t) => t.counterCheck);
+    const n = idle.reduce((s, t) => s + rejudgeIdle(t, th).length, 0), rate = n / min;
+    lines.push(`- ×${k} ${hold}ms: ${pct(a.filter((t) => t.success1).length, a.length)}/${pct(a.filter((t) => t.success2).length, a.length)} / ${c.length ? pct(c.filter((t) => t.counterCheck.falsePos.length).length, c.length) : "-"} / ${rate.toFixed(1)}回・${Math.round(100 * (1 - Math.exp(-rate / 60 * 1.15)))}%`);
+  }
 }
 // 素振りの間（手の速さ > 素振りありの閾値）は回避を数えない、とした場合の比較（記録済みのデータを判定し直すだけ）
 function swingMaskCompare(lines) {

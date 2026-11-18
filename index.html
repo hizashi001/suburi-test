@@ -202,6 +202,7 @@
     <div class="row">
       <label>カメラの小窓</label><select id="b-cam"><option value="1" selected>出す</option><option value="0">出さない</option></select>
       <label>結果音</label><select id="b-fb"><option value="1" selected>鳴らす</option><option value="0">鳴らさない</option></select>
+      <label>命中の音</label><select id="b-hitsnd"><option value="1" selected>鳴らす</option><option value="0">鳴らさない</option></select>
       <button class="b" id="b-preview">攻撃を1回見る（判定なし）</button>
     </div>
   </details>
@@ -241,7 +242,7 @@ const MODELS = {
   full: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
 };
 // 版の番号（画面の右上と要約に出す。キャッシュで古いページが出ていないかの確かめ用）
-const VERSION = "2026-11-18d";
+const VERSION = "2026-11-18e";
 const LOG_KEY = "dodgelab.log.v1", TH_KEY = "dodgelab.th.v4", CAL_KEY = "dodgelab.cal.v3"; // 指標を足したので基準は取り直し
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -1167,7 +1168,7 @@ for (const id of ATK_IDS) {
 }
 const B_INPUTS = ["b-n", "b-mode", "b-speed", "b-ms-slow", "b-ms-mid", "b-ms-fast", "b-windup", "b-holdmin", "b-holdmax", "b-kamaemin", "b-kamaemax",
   "b-tel-mark", "b-tel-ring", "b-tel-sound", "b-lead", "b-leadmix", "b-pre", "b-post", "b-table", "b-size", "b-contrast", "b-posy", "b-posx", "b-cam", "b-fb",
-  "b-kind", "b-idlesec", "b-combo", "b-intmin", "b-intmax", "b-counter"];
+  "b-kind", "b-idlesec", "b-combo", "b-intmin", "b-intmax", "b-counter", "b-hitsnd"];
 function bGet() {
   const o = {};
   for (const id of B_INPUTS) { const el = $(id); o[id] = el.type === "checkbox" ? el.checked : el.value; }
@@ -1424,7 +1425,10 @@ function judgeAttack(tr, th, table, pre, post) {
   }
   // 弾き（パリィ・段階5）：命中にいちばん近い素振りの「速さの山」と命中のずれ。±parryMs に入れば弾き
   const swings = swingsOf(tr.frames, tr.fields, tr.hitT - 1500, tr.hitT + 800, th);
-  const near = swings.length ? swings.reduce((a, b) => (Math.abs(b.peakT - tr.hitT) < Math.abs(a.peakT - tr.hitT) ? b : a)) : null;
+  // 弾きに使う素振りは、命中の前後0.8秒に速さの山がある中で「一番速い1本」（v2）。
+  //   初版は命中に一番近い1本を使っていて、振りかぶり（遅い）が命中の近くにあるとそれを弾きと数えてしまっていた
+  const cand = swings.filter((s) => Math.abs(s.peakT - tr.hitT) <= 800);
+  const near = cand.length ? cand.reduce((a, b) => (b.peak > a.peak ? b : a)) : null;
   const parryOffset = near ? Math.round(near.peakT - tr.hitT) : null;
   const parry = parryOffset != null && Math.abs(parryOffset) <= (th.parryMs ?? 150);
   return {
@@ -1477,7 +1481,7 @@ async function runB(previewOnly = false) {
       }
       for (const a of combo) {
         if (a.teleT != null && a.tel.sound) setTimeout(teleSound, Math.max(0, a.teleT - now()));
-        setTimeout(() => noiseHit(0.6, 140, 1600), Math.max(0, a.hitT - now()));
+        if (o["b-hitsnd"] !== "0") setTimeout(() => noiseHit(0.6, 140, 1600), Math.max(0, a.hitT - now()));
       }
       if (counterT != null) setTimeout(counterSound, Math.max(0, counterT - now()));
       await sleepUntil(capEnd);
@@ -1498,7 +1502,7 @@ async function runB(previewOnly = false) {
           windupStart: Math.round(a.windupStart), strikeStart: Math.round(a.strikeStart), teleT: a.teleT == null ? null : Math.round(a.teleT),
           hitT: Math.round(a.hitT), anchorT: Math.round(s0), capEnd: Math.round(s1),
           counter: counterOn && isLast, counterT: counterOn && isLast ? Math.round(counterT) : null,
-          windowPre: preK, windowPost: post, table: table[a.type] || [],
+          windowPre: preK, windowPost: post, table: table[a.type] || [], hitSound: o["b-hitsnd"] !== "0",
           fps: shown.poseFps, inferMs: shown.inferMs, thresholds: { ...TH },
           enemy: { size: +o["b-size"], contrast: +o["b-contrast"], posx: +o["b-posx"], posy: +o["b-posy"] },
           fields: FIELDS, frames: frames.filter((f) => f[0] >= s0 - 600 && f[0] <= s1),
@@ -1742,6 +1746,16 @@ function stage5Summary(tsB, lines) {
     if (p.length) {
       const byT = {}; for (const t of p) { byT[t.type] ||= { n: 0, ok: 0 }; byT[t.type].n++; if (t.success4) byT[t.type].ok++; }
       lines.push(`  攻撃の種類ごと（±${TH.parryMs}ms）: ${Object.entries(byT).map(([k, x]) => `${ATK[k].name} ${pct(x.ok, x.n)}（${x.n}）`).join("、")}`);
+      // 人ごとの遅れを差し引く（音ゲームの「タイミング調整」と同じ考え）：窓の中心を c ms ずらしたとき、いちばん当たる c
+      const po = p.map((t) => t.parryOffset).filter((x) => x != null);
+      for (const w of [150, 200]) {
+        let best = { c: 0, n: -1 };
+        for (let c = -300; c <= 600; c += 25) { const n = po.filter((x) => Math.abs(x - c) <= w).length; if (n > best.n) best = { c, n }; }
+        lines.push(`  窓の中心を命中の${best.c >= 0 ? "+" : ""}${best.c}msにずらすと、±${w}msで ${pct(best.n, p.length)}（ずらさないと ${pct(po.filter((x) => Math.abs(x) <= w).length, p.length)}）`);
+      }
+      // 命中の音あり／なしで分ける（音を聞いてから振っているなら、音なしで遅れが変わるはず）
+      const bySnd = { 鳴らす: p.filter((t) => t.hitSound !== false), 鳴らさない: p.filter((t) => t.hitSound === false) };
+      if (bySnd.鳴らさない.length) lines.push(`  命中の音で分ける: ${Object.entries(bySnd).filter(([, xs]) => xs.length).map(([k, xs]) => { const o = xs.map((t) => t.parryOffset).filter((x) => x != null); return `${k} ${xs.length}本 ずれ中央${q(o, 0.5) ?? "-"}ms ±150ms ${pct(o.filter((x) => Math.abs(x) <= 150).length, xs.length)}`; }).join("／")}`);
     }
   }
   // 素振りの強さ（速さの山の下限）×測り方（腰から／肩から）の比較。本物の回避・誤検知・弾きを並べる

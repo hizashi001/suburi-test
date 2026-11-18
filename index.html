@@ -242,7 +242,7 @@ const MODELS = {
   full: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
 };
 // 版の番号（画面の右上と要約に出す。キャッシュで古いページが出ていないかの確かめ用）
-const VERSION = "2026-11-18e";
+const VERSION = "2026-11-18f";
 const LOG_KEY = "dodgelab.log.v1", TH_KEY = "dodgelab.th.v4", CAL_KEY = "dodgelab.cal.v3"; // 指標を足したので基準は取り直し
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -606,6 +606,8 @@ TH_DEFAULT.swing = 2.5;
 Object.assign(TH_DEFAULT, { swingMask2: 1, parryMs: 150 });
 // 段階5 v3：素振りは肩から見た手で測る（記録があれば）。速さの山がこれ未満の素振りは数えない（1.6＝本編と同じで、何も除かない）
 Object.assign(TH_DEFAULT, { swingRel: 1, swingPeakMin: 1.6 });
+// 弾きのタイミング調整（ms、＋＝命中より後を中心にする）。初期値0。実機ではヒデキの遅れが約+225〜300msだった
+TH_DEFAULT.parryShift = 0;
 const TH_INFO = {
   crouch:  { name: "しゃがみ：沈み >", min: 0.1, max: 1, step: 0.01 },
   step:    { name: "ステップ：腰の横ずれ >", min: 0.1, max: 1.5, step: 0.01 },
@@ -621,6 +623,7 @@ const TH_INFO = {
   swing:   { name: "素振りあり：手の速さ >", min: 0.5, max: 8, step: 0.1 },
   swingMask2: { name: "素振りの間は回避を数えない（0/1）", min: 0, max: 1, step: 1 },
   parryMs: { name: "弾き：命中の±ms", min: 30, max: 400, step: 10 },
+  parryShift: { name: "弾き：タイミング調整 ms（＋＝遅め）", min: -300, max: 600, step: 25 },
   swingRel: { name: "素振りは肩から見た手で測る（0/1）", min: 0, max: 1, step: 1 },
   swingPeakMin: { name: "素振りとみなす速さの山 m/秒 ≥", min: 1.6, max: 8, step: 0.1 },
 };
@@ -826,6 +829,39 @@ function swingsOf(frames, fields, t0 = -Infinity, t1 = Infinity, th = TH) {
   // 記録の終わりで振り終わっていない素振りも数える
   if (cur && cur.i0 < fs.length - 1) { const sw = piece(cur.i0, fs.length - 1); sw.part = cur.part; sw.cut = true; push(sw); }
   return out.filter((s) => s.end >= t0);
+}
+// 「肩から見た手」を記録した試行（版2026-11-18d以降の計測）だけの集計。古い記録と混ぜると効き目が薄まって見えるため
+function relOnlySummary(lines) {
+  const rel = (t) => (t.fields || []).includes("hr3");
+  const B = LOG.trials.filter((t) => t.kind === "labB" && rel(t)), I = LOG.trials.filter((t) => t.kind === "labB-idle" && rel(t));
+  if (!B.length && !I.length) return;
+  const s = (xs, k) => `${pct(xs.filter((t) => t[k]).length, xs.length)}`;
+  const noMask = { ...TH, swingMask2: 0 }, hip = { ...TH, swingMask2: 1, swingRel: 0 }, sh = { ...TH, swingMask2: 1, swingRel: 1 };
+  lines.push("### 新しい記録だけ（肩から見た手あり）。素振りの間を「数えない→腰から見て除く→肩から見て除く」");
+  const dodge = B.filter((t) => t.mode !== "4");
+  if (dodge.length) {
+    const a = rejudgeB(dodge, noMask), b = rejudgeB(dodge, hip), c = rejudgeB(dodge, sh);
+    lines.push(`よけた攻撃${dodge.length}本: 成功1 ${s(a, "success1")}→${s(b, "success1")}→${s(c, "success1")} 成功2 ${s(a, "success2")}→${s(b, "success2")}→${s(c, "success2")}`);
+    const lost = a.filter((t, i) => t.success1 && !c[i].success1);
+    if (lost.length) lines.push(`  肩から見ても消えた回避${lost.length}本（元の動き ${Object.entries(lost.reduce((m, t) => ((m[t.dodge?.cls] = (m[t.dodge?.cls] || 0) + 1), m), {})).map(([k, n]) => `${CLASSES[k]?.name || k}${n}`).join(" ")}）`);
+    const cnt = {}; for (const t of a) if (t.dodge) cnt[t.dodge.cls] = (cnt[t.dodge.cls] || 0) + 1;
+    lines.push(`  よけた動きの内訳（除く前）: ${Object.entries(cnt).map(([k, n]) => `${CLASSES[k]?.name || k}${n}`).join(" ")}`);
+    const cc = [a, b, c].map((xs) => xs.filter((t) => t.counterCheck));
+    if (cc[0].length) lines.push(`反撃の素振り${cc[0].length}回: 素振りを拾えた ${pct(cc[2].filter((t) => t.counterCheck.swing).length, cc[2].length)} 誤検知 ${cc.map((xs) => pct(xs.filter((t) => t.counterCheck.falsePos.length).length, xs.length)).join("→")}`);
+  }
+  const p4 = rejudgeB(B.filter((t) => t.mode === "4"), sh);
+  if (p4.length) {
+    const offs = p4.map((t) => t.parryOffset).filter((x) => x != null);
+    let best = { c: 0, n: -1 }; for (let c = -300; c <= 600; c += 25) { const n = offs.filter((x) => Math.abs(x - c) <= 150).length; if (n > best.n) best = { c, n }; }
+    const snd = (v) => p4.filter((t) => (t.hitSound !== false) === v).map((t) => t.parryOffset).filter((x) => x != null);
+    lines.push(`弾き${p4.length}本（命中の音 鳴らす${snd(true).length}・鳴らさない${snd(false).length}）: ずれ 中央${q(offs, 0.5) ?? "-"}ms（10%点 ${q(offs, 0.1) ?? "-"} / 90%点 ${q(offs, 0.9) ?? "-"}） ±150ms ${pct(offs.filter((x) => Math.abs(x) <= 150).length, p4.length)} → 中心を${best.c >= 0 ? "+" : ""}${best.c}msにずらすと ${pct(best.n, p4.length)}（今のタイミング調整 ${TH.parryShift}ms で ${s(p4, "success4")}）`);
+    if (snd(false).length) lines.push(`  音なしのずれ 中央${q(snd(false), 0.5)}ms ／ 音ありのずれ 中央${q(snd(true), 0.5) ?? "-"}ms`);
+  }
+  if (I.length) {
+    const min = I.reduce((m, t) => m + t.durationMs, 0) / 60000;
+    const n = (th) => I.reduce((m, t) => m + rejudgeIdle(t, th).length, 0) / min;
+    lines.push(`攻撃なし${min.toFixed(1)}分: 1分あたり ${n(noMask).toFixed(1)}→${n(hip).toFixed(1)}→${n(sh).toFixed(1)}回`);
+  }
 }
 // 素振りの間（始まり−100ms〜終わり＋250ms）かどうかを、コマごとに印を付ける
 function swingMaskOf(frames, fields, swings) {
@@ -1430,7 +1466,8 @@ function judgeAttack(tr, th, table, pre, post) {
   const cand = swings.filter((s) => Math.abs(s.peakT - tr.hitT) <= 800);
   const near = cand.length ? cand.reduce((a, b) => (b.peak > a.peak ? b : a)) : null;
   const parryOffset = near ? Math.round(near.peakT - tr.hitT) : null;
-  const parry = parryOffset != null && Math.abs(parryOffset) <= (th.parryMs ?? 150);
+  // タイミング調整（parryShift）：人ごとの遅れを差し引く。窓の中心を命中の parryShift ms 後にずらす
+  const parry = parryOffset != null && Math.abs(parryOffset - (th.parryShift ?? 0)) <= (th.parryMs ?? 150);
   return {
     segments: segs, dodge, counterCheck: counter, swings, parryOffset, parry, parrySwing: near,
     success1: ok1, success2: ok2, success4: parry,
@@ -1772,6 +1809,7 @@ function stage5Summary(tsB, lines) {
       lines.push(`- ${pm} / ${rel ? "肩から" : "腰から"}: ${s(dg, "success1")}・${s(dg, "success2")} / ${cc.length ? pct(cc.filter((t) => t.counterCheck.falsePos.length).length, cc.length) : "-"} / ${idleN == null ? "-" : idleN.toFixed(1)}回 / ${p4.length ? `${pct(offs.filter((x) => Math.abs(x) <= 150).length, p4.length)}・${pct(offs.filter((x) => Math.abs(x) <= 300).length, p4.length)}・${q(offs, 0.5) ?? "-"}ms` : "-"}`);
     }
   }
+  relOnlySummary(lines);
   if (I.length) {
     const min = I.reduce((s, t) => s + t.durationMs, 0) / 60000;
     const n0 = I.reduce((s, t) => s + rejudgeIdle(t, off).length, 0), n1 = I.reduce((s, t) => s + rejudgeIdle(t, on).length, 0);

@@ -135,6 +135,7 @@
       <option value="1">1 なんでも成功</option>
       <option value="2">2 方向指定</option>
       <option value="3">3 記録のみ</option>
+      <option value="4">4 弾き（命中に合わせて振る）</option>
     </select>
   </div>
   <div class="row">
@@ -507,12 +508,23 @@ const CLASSES = {
   leanL:  { name: "上体・左へ倒す", say: "上体を、左へ", color: "#ff6bd5", extra: true },
   sway:   { name: "反らす", say: "反らす", color: "#ff6bd5", extra: true },
   leanF:  { name: "前にかがむ", say: "前に、かがむ", color: "#ff6bd5", extra: true },
+  // 段階5（A：素振りと回避を分ける）：回避ではない動きのラベル。正解は「回避を拾わない」（中段か素振り）
+  suburiKesa:  { name: "素振り・袈裟", say: "素振り、袈裟", color: "#9fb4c8", extra: true, noDodge: true },
+  suburiYoko:  { name: "素振り・横", say: "素振り、横", color: "#9fb4c8", extra: true, noDodge: true },
+  suburiTsuki: { name: "素振り・突き", say: "素振り、突き", color: "#9fb4c8", extra: true, noDodge: true },
+  kamaeNaoshi: { name: "構え直し", say: "構え直す", color: "#9fb4c8", extra: true, noDodge: true },
+  // 判定の答えとしてだけ出るもの（ラベルにはしない）
+  swing: { name: "素振り", say: "", color: "#9fb4c8", predOnly: true },
 };
 const CLASS_IDS = Object.keys(CLASSES).filter((id) => !CLASSES[id].internal);
+// 回避の動き（表の列などに使う）
+const DODGE_IDS = CLASS_IDS.filter((c) => c !== "chudan" && !CLASSES[c].noDodge && !CLASSES[c].predOnly);
+// ラボAの正誤：回避でない動きのラベルは、回避を拾わなければ正解
+const isCorrectA = (label, pred) => (CLASSES[label]?.noDodge ? pred === "chudan" || pred === "swing" : pred === label);
 const BACK_CM = [10, 20, 30, 50];
 
 // 指標（1コマ分）。frames に残すのはこの順の数値の配列
-const FIELDS = ["shift", "drop", "back", "swDrop", "dz", "tilt", "handUp", "gap", "forearm", "handZ", "handDir", "gapY", "hipShift", "leanX", "leanZ", "hspd"];
+const FIELDS = ["shift", "drop", "back", "swDrop", "dz", "tilt", "handUp", "gap", "forearm", "handZ", "handDir", "gapY", "hipShift", "leanX", "leanZ", "hspd", "hs3", "h3x", "h3y", "h3z"];
 const METRIC_INFO = {
   shift:   { name: "横ずれ", unit: "胴", desc: "肩の中点の横の動き（+が自分の左）", lo: -1, hi: 1 },
   drop:    { name: "沈み", unit: "胴", desc: "肩の中点が下がった量", lo: -0.3, hi: 0.8 },
@@ -529,6 +541,10 @@ const METRIC_INFO = {
   leanX:   { name: "上体の横倒し", unit: "胴", desc: "肩の中点が腰の中点より横に出た量（基準との差、+が自分の左）。足は動かさず上体だけ倒すと大きい", lo: -0.6, hi: 0.6 },
   leanZ:   { name: "上体の前後", unit: "m", desc: "3D推定の肩の中点の奥行き（腰が基準、基準との差）。+が奥＝反らす、−が手前＝前にかがむ", lo: -0.4, hi: 0.4 },
   hspd:    { name: "手の速さ", unit: "胴/秒", desc: "両手の中点の画面上の速さ。素振りがあったかを見る（段階4）", lo: 0, hi: 8 },
+  hs3:     { name: "手の3Dの速さ", unit: "m/秒", desc: "本編の素振り検出と同じ作りの、手首の3D位置の速さ。1.6を越えたら振り始め（赤線）", lo: 0, hi: 8 },
+  h3x:     { name: "手の3D 左右", unit: "m", desc: "手首の3D位置（腰が原点、+が右）", lo: -0.8, hi: 0.8 },
+  h3y:     { name: "手の3D 上下", unit: "m", desc: "手首の3D位置（+が下）", lo: -0.8, hi: 0.8 },
+  h3z:     { name: "手の3D 前後", unit: "m", desc: "手首の3D位置（+がカメラ側、奥行き1.5倍）", lo: -0.8, hi: 0.8 },
   handDir: { name: "手先の向き", unit: "度", desc: "手首→指の付け根（人差し指と小指の中点）の向き。0=真上、180=真下。刀を立てると手首の返しで変わるかを見る", lo: 0, hi: 180 },
 };
 
@@ -549,6 +565,8 @@ delete TH_DEFAULT.guardGap;
 Object.assign(TH_DEFAULT, { leanX: 0.15, sway: 0.08 });
 // 段階4：素振りがあったとみなす手の速さ（胴の長さ/秒、仮の値）。判定には使わず、反撃の素振りの記録だけに使う
 TH_DEFAULT.swing = 2.5;
+// 段階5：素振りの間は回避を数えない（1＝する、0＝しない）。弾き（パリィ）は素振りの速さの山が命中の±parryMs に入れば成功
+Object.assign(TH_DEFAULT, { swingMask2: 1, parryMs: 150 });
 const TH_INFO = {
   crouch:  { name: "しゃがみ：沈み >", min: 0.1, max: 1, step: 0.01 },
   step:    { name: "ステップ：腰の横ずれ >", min: 0.1, max: 1.5, step: 0.01 },
@@ -562,6 +580,8 @@ const TH_INFO = {
   back:    { name: "下がり：縮み >", min: 0.01, max: 0.2, step: 0.005 },
   holdMs:  { name: "続いた時間 ms ≥", min: 0, max: 600, step: 10 },
   swing:   { name: "素振りあり：手の速さ >", min: 0.5, max: 8, step: 0.1 },
+  swingMask2: { name: "素振りの間は回避を数えない（0/1）", min: 0, max: 1, step: 1 },
+  parryMs: { name: "弾き：命中の±ms", min: 30, max: 400, step: 10 },
 };
 let TH;
 try { TH = { ...TH_DEFAULT, ...(JSON.parse(localStorage.getItem(TH_KEY)) || {}) }; } catch { TH = { ...TH_DEFAULT }; }
@@ -571,6 +591,8 @@ function saveTH() { try { localStorage.setItem(TH_KEY, JSON.stringify(TH)); } ca
 function classify(m, th) {
   // 素振りの間は回避を数えない（段階4の試し。th.swingMask が無ければ何もしない）
   if (th.swingMask && (m.hspd ?? 0) > th.swingMask) return "chudan";
+  // 段階5：本編と同じ作りの素振り検出で切り出した素振りの間（前後の余白つき）は回避を数えない
+  if (th.swingMask2 && m.inSwing) return "chudan";
   if (m.drop > th.crouch) return "crouch";
   // ステップは腰の横ずれで見る（v4）。腰の横ずれを記録していない古い試行は、肩の横ずれで見る
   const sx = m.hipShift ?? m.shift;
@@ -661,14 +683,72 @@ function onPose(lm, wl, t) {
   // 手の速さ（胴の長さ/秒）。前のコマとの差から
   m0.hspd = prevHand && t > prevHand.t ? Math.hypot(r.hx - prevHand.x, r.hy - prevHand.y) / CAL.T / ((t - prevHand.t) / 1000) : 0;
   prevHand = { t, x: r.hx, y: r.hy };
+  // 手の3D位置（メートル）と速さ（m/秒）。本編 index.html の素振り検出と同じ作り（読んで写したもの）：
+  //   手首の3D推定を「胴の長さ＝身長の29%」で実寸にし、奥行きは1.5倍。位置は前の値と混ぜてならし、速さも混ぜてならす
+  //   身長は本編の設定値を使えないので170cmと決め打ち（速さの数字が少し変わるだけ）
+  const h3 = hand3Of(wl);
+  if (h3) {
+    if (hand3s) {
+      const dt = (t - hand3s.t) / 1000;
+      const p = [hand3s.p[0] * 0.45 + h3[0] * 0.55, hand3s.p[1] * 0.45 + h3[1] * 0.55, hand3s.p[2] * 0.6 + h3[2] * 0.4];
+      const v = dt > 0 ? Math.hypot(p[0] - hand3s.p[0], p[1] - hand3s.p[1], p[2] - hand3s.p[2]) / dt : 0;
+      hand3s = { t, p, s: hand3s.s * 0.4 + v * 0.6 };
+    } else hand3s = { t, p: h3, s: 0 };
+  }
   // 軽くならす（ガタつき対策。遅れは1〜2コマ）
-  smooth = smooth ? Object.fromEntries(FIELDS.map((k) => [k, smooth[k] * 0.5 + m0[k] * 0.5])) : m0;
+  smooth = smooth ? Object.fromEntries(FIELDS.map((k) => [k, smooth[k] * 0.5 + (m0[k] ?? 0) * 0.5])) : { ...m0 };
+  // 手の3Dは本編と同じならし方をしてあるので、ここでは二重にならさない
+  if (hand3s) { smooth.hs3 = hand3s.s; smooth.h3x = hand3s.p[0]; smooth.h3y = hand3s.p[1]; smooth.h3z = hand3s.p[2]; }
   liveM = smooth;
   liveCls = classify(liveM, TH);
   hist.push({ t, m: liveM }); while (hist.length && t - hist[0].t > 3000) hist.shift();
-  if (capture) capture.frames.push([Math.round(t), ...FIELDS.map((k) => +liveM[k].toFixed(k === "tilt" || k === "forearm" || k === "handDir" ? 1 : 3))]);
-  const c = CLASSES[liveCls];
+  if (capture) capture.frames.push([Math.round(t), ...FIELDS.map((k) => +(liveM[k] ?? 0).toFixed(k === "tilt" || k === "forearm" || k === "handDir" ? 1 : 3))]);
+  const c = (liveM.hs3 ?? 0) > SW.START ? CLASSES.swing : CLASSES[liveCls];
   $("big").textContent = c.name; $("big").style.color = c.color;
+}
+let hand3s = null, kScale3 = 0;
+const TORSO_M = 1.70 * 0.29;
+function hand3Of(wl) {
+  if (!wl) return null;
+  const m3 = (a, b) => [(a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2];
+  const sm = m3(wl[11], wl[12]), hm = m3(wl[23], wl[24]);
+  const torsoW = Math.hypot(sm[0] - hm[0], sm[1] - hm[1], sm[2] - hm[2]);
+  if (torsoW > 0.15) { const k = TORSO_M / torsoW; kScale3 = kScale3 ? kScale3 * 0.95 + k * 0.05 : k; }
+  const a = wl[15], b = wl[16], vl = Math.max(0.05, a.visibility ?? 1), vr = Math.max(0.05, b.visibility ?? 1), s = kScale3 || 1;
+  return [-((a.x * vl + b.x * vr) / (vl + vr)) * s, ((a.y * vl + b.y * vr) / (vl + vr)) * s, -((a.z * vl + b.z * vr) / (vl + vr)) * s * 1.5];
+}
+// 素振りの切り出し（本編の detector と同じ数：振り始め 1.6 m/s、振り終わり 0.6 m/s を 80ms、始まりは 0.45 m/s までさかのぼる、
+// 0.18m 未満の動きは素振りでない、1.6秒で打ち切り）。本編の「一筆書き」の分割はしていない（連続した素振りは1本にまとまる）
+const SW = { START: 1.6, STOP: 0.6, ONSET: 0.45, MIN_AMP: 0.18, MAX_MS: 1600 };
+function swingsOf(frames, fields, t0 = -Infinity, t1 = Infinity) {
+  const ix = (k) => (fields || []).indexOf(k) + 1;
+  const is = ix("hs3"), ixx = ix("h3x"), iy = ix("h3y"), iz = ix("h3z");
+  if (!is || !ixx) return [];
+  const out = []; let cur = null, low = 0;
+  const fs = frames.filter((f) => f[0] >= t0 - 800 && f[0] <= t1);
+  for (let i = 0; i < fs.length; i++) {
+    const f = fs[i], t = f[0], s = f[is];
+    if (!cur) {
+      if (s > SW.START) {
+        let j = i; while (j > 0 && fs[j - 1][is] > SW.ONSET) j--;
+        cur = { i0: j, onset: fs[j][0], start: t, peak: s, peakT: t }; low = 0;
+      }
+    } else {
+      if (s > cur.peak) { cur.peak = s; cur.peakT = t; }
+      if (s < SW.STOP) low = low || t; else low = 0;
+      if ((low && t - low > 80) || t - cur.start > SW.MAX_MS) {
+        const a = fs[cur.i0], b = f, d = [b[ixx] - a[ixx], b[iy] - a[iy], b[iz] - a[iz]], amp = Math.hypot(...d);
+        if (amp >= SW.MIN_AMP && cur.onset <= t1) out.push({ onset: cur.onset, start: cur.start, peakT: cur.peakT, end: t, peak: +cur.peak.toFixed(2), amp: +amp.toFixed(2), dir: d.map((x) => +(x / amp).toFixed(2)) });
+        cur = null;
+      }
+    }
+  }
+  return out.filter((s) => s.end >= t0);
+}
+// 素振りの間（始まり−100ms〜終わり＋250ms）かどうかを、コマごとに印を付ける
+function swingMaskOf(frames, fields, swings) {
+  if (!swings.length) return null;
+  return frames.map((f) => swings.some((s) => f[0] >= s.onset - 100 && f[0] <= s.end + 250));
 }
 
 // 生の量の平均（t0〜t1）
@@ -724,7 +804,7 @@ for (const k of FIELDS) {
 }
 const TH_LINES = { // グラフに引く閾値の線
   shift: () => [TH.step, -TH.step], drop: () => [TH.crouch], back: () => [TH.back], swDrop: () => [TH.hanmiSw],
-  dz: () => [TH.hanmiZ, -TH.hanmiZ], handUp: () => [TH.guardUp], gap: () => [TH.guardGapMin],
+  dz: () => [TH.hanmiZ, -TH.hanmiZ], handUp: () => [TH.guardUp], gap: () => [TH.guardGapMin], hs3: () => [SW.START],
 };
 let lastDraw = 0;
 function drawMetrics() {
@@ -765,7 +845,7 @@ $("btn-th-reset").onclick = () => { TH = { ...TH_DEFAULT }; saveTH(); buildTH();
 
 // ---- 計測のラベル選び ----
 const chipEl = $("label-chips");
-for (const id of CLASS_IDS) {
+for (const id of CLASS_IDS.filter((c) => !CLASSES[c].predOnly)) {
   const l = document.createElement("label");
   l.innerHTML = `<input type="checkbox" value="${id}" ${CLASSES[id].extra ? "" : "checked"}> ${CLASSES[id].name}`;
   chipEl.append(l);
@@ -798,9 +878,12 @@ function judgeFrames(frames, fields, winStart, winEnd, th) {
   const segs = []; let seg = null;
   const dirMs = { hanmiR: 0, hanmiL: 0 };
   let prevT = null;
-  for (const f of frames) {
+  const swings = swingsOf(frames, fields, winStart, winEnd), mask = swingMaskOf(frames, fields, swings);
+  for (let fi = 0; fi < frames.length; fi++) {
+    const f = frames[fi];
     const t = f[0]; if (t < winStart || t > winEnd) continue;
     const m = Object.fromEntries(FIELDS.map((k) => [k, idx[k] ? f[idx[k]] : undefined]));
+    m.inSwing = mask ? mask[fi] : false;
     for (const k of FIELDS) { if (peak[k] == null || Math.abs(m[k]) > Math.abs(peak[k])) peak[k] = m[k]; }
     const c = classify(m, th), g = grp(c);
     const dt = prevT == null ? 0 : t - prevT; prevT = t;
@@ -817,8 +900,10 @@ function judgeFrames(frames, fields, winStart, winEnd, th) {
   for (const g in total) if (!best || total[g] > total[best]) best = g;
   let pred = best || "chudan";
   if (pred === "hanmi") pred = dirMs.hanmiR > dirMs.hanmiL ? "hanmiR" : dirMs.hanmiL > dirMs.hanmiR ? "hanmiL" : (peak.dz ?? 0) >= 0 ? "hanmiR" : "hanmiL";
-  const onsetAt = best ? firstAt[best] : null;
-  return { pred, onsetMs: onsetAt == null ? null : Math.round(onsetAt - winStart), onsetAt, heldMs: best ? total[best] : 0, peak };
+  let onsetAt = best ? firstAt[best] : null;
+  // 回避を拾わず、素振りを拾ったときは「素振り」と答える
+  if (pred === "chudan" && swings.length) { pred = "swing"; onsetAt = swings[0].onset; }
+  return { pred, onsetMs: onsetAt == null ? null : Math.round(onsetAt - winStart), onsetAt, heldMs: best ? total[best] : 0, peak, swings };
 }
 
 async function runMeasure() {
@@ -869,7 +954,7 @@ async function runMeasure() {
       $("cue").textContent = "";
       // 3) 判定と記録
       const j = judgeFrames(frames, FIELDS, sayT, winEnd, TH);
-      const correct = j.pred === it.label;
+      const correct = isCorrectA(it.label, j.pred);
       const fpsNow = shown.poseFps;
       const trial = {
         id: (LOG.trials.at(-1)?.id || 0) + 1, kind: "labA", runId: run.id, i,
@@ -907,7 +992,7 @@ function scopeTrials() {
 function rejudge(ts) {
   return ts.map((t) => {
     const j = judgeFrames(t.frames, t.fields, t.sayT, t.winEnd, TH);
-    return { ...t, pred: j.pred, onsetMs: j.onsetMs, onsetFromEndMs: j.onsetAt != null && t.sayEnd ? Math.round(j.onsetAt - t.sayEnd) : null, peak: j.peak, correct: j.pred === t.label };
+    return { ...t, pred: j.pred, onsetMs: j.onsetMs, onsetFromEndMs: j.onsetAt != null && t.sayEnd ? Math.round(j.onsetAt - t.sayEnd) : null, peak: j.peak, correct: isCorrectA(t.label, j.pred) };
   });
 }
 const med = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
@@ -1202,9 +1287,12 @@ function segmentsOf(frames, fields, t0, t1, th) {
   const idx = Object.fromEntries((fields || FIELDS).map((k, i) => [k, i + 1]));
   const grp = (c) => (c === "hanmiX" || c === "hanmiR" || c === "hanmiL" ? "hanmi" : c);
   const segs = [], pts = []; let seg = null, prevT = null;
-  for (const f of frames) {
+  const swings = swingsOf(frames, fields, t0, t1), mask = swingMaskOf(frames, fields, swings);
+  for (let fi = 0; fi < frames.length; fi++) {
+    const f = frames[fi];
     const t = f[0]; if (t < t0 || t > t1) continue;
     const m = Object.fromEntries(FIELDS.map((k) => [k, idx[k] ? f[idx[k]] : undefined]));
+    m.inSwing = mask ? mask[fi] : false;
     pts.push({ t, m });
     const c = classify(m, th), g = grp(c), dt = prevT == null ? 0 : t - prevT; prevT = t;
     if (!seg || seg.g !== g) { seg = { g, start: t, end: t, i0: pts.length - 1, dir: { hanmiR: 0, hanmiL: 0 }, peak: {} }; segs.push(seg); } else seg.end = t;
@@ -1247,11 +1335,20 @@ function judgeAttack(tr, th, table, pre, post) {
     const ih = (tr.fields || []).indexOf("hspd") + 1;
     const sp = ih ? tr.frames.filter((f) => f[0] >= tr.counterT && f[0] <= c1).map((f) => f[ih]) : [];
     const peak = sp.length ? Math.max(...sp) : null;
-    counter = { from: Math.round(c0), to: Math.round(c1), falsePos: fp.map((s) => s.cls), swing: peak != null && peak > (th.swing ?? 2.5), swingPeak: peak == null ? null : +peak.toFixed(2) };
+    // 段階5：本編と同じ作りの素振り検出があれば、そちらで素振りの有無を見る
+    const sw3 = swingsOf(tr.frames, tr.fields, tr.counterT, c1);
+    const has3 = (tr.fields || []).includes("hs3");
+    counter = { from: Math.round(c0), to: Math.round(c1), falsePos: fp.map((s) => s.cls),
+      swing: has3 ? sw3.length > 0 : peak != null && peak > (th.swing ?? 2.5), swingPeak: peak == null ? null : +peak.toFixed(2) };
   }
+  // 弾き（パリィ・段階5）：命中にいちばん近い素振りの「速さの山」と命中のずれ。±parryMs に入れば弾き
+  const swings = swingsOf(tr.frames, tr.fields, tr.hitT - 1500, tr.hitT + 800);
+  const near = swings.length ? swings.reduce((a, b) => (Math.abs(b.peakT - tr.hitT) < Math.abs(a.peakT - tr.hitT) ? b : a)) : null;
+  const parryOffset = near ? Math.round(near.peakT - tr.hitT) : null;
+  const parry = parryOffset != null && Math.abs(parryOffset) <= (th.parryMs ?? 150);
   return {
-    segments: segs, dodge, counterCheck: counter,
-    success1: ok1, success2: ok2,
+    segments: segs, dodge, counterCheck: counter, swings, parryOffset, parry, parrySwing: near,
+    success1: ok1, success2: ok2, success4: parry,
     reactFromTele: dodge && tr.teleT != null ? Math.round(st(dodge) - tr.teleT) : null,
     reactFromHit: dodge ? Math.round(st(dodge) - tr.hitT) : null,
     crossFromHit: dodge ? Math.round(dodge.start - tr.hitT) : null,   // 閾値を越えた時刻（参考）
@@ -1332,16 +1429,19 @@ async function runB(previewOnly = false) {
       });
       saveLogSoon();
       // 結果の音と文字（連撃は全部よけたら成功。モード3は判定しないので、動きを拾ったかだけ短く知らせる）
-      const okOf = (t) => (mode === "1" ? t.success1 : mode === "2" ? t.success2 : null);
+      const okOf = (t) => (mode === "1" ? t.success1 : mode === "2" ? t.success2 : mode === "4" ? t.success4 : null);
       const ok = mode === "3" ? null : made.every(okOf);
       const nOk = made.filter(okOf).length;
+      const word = mode === "4" ? "弾き" : "回避";
       if (o["b-fb"] === "1") {
         if (ok === true) { beep(1300, 90); setTimeout(() => beep(1700, 120), 110); }
         else if (ok === false) beep(220, 350);
         else beep(made.some((t) => t.dodge) ? 900 : 500, 80);
       }
-      flash = ok === true ? { text: made.length > 1 ? `全部回避 ${nOk}/${made.length}` : "回避", color: "#5fd18a", until: now() + 900 }
-        : ok === false ? { text: made.length > 1 ? `被弾 回避${nOk}/${made.length}` : "被弾", color: "#e8664f", until: now() + 900 }
+      // 弾きは、ずれ（ms）も出す（＋は命中より遅い）
+      const offTxt = mode === "4" && made.length === 1 && made[0].parryOffset != null ? ` ${made[0].parryOffset > 0 ? "+" : ""}${made[0].parryOffset}ms` : "";
+      flash = ok === true ? { text: made.length > 1 ? `全部${word} ${nOk}/${made.length}` : word + offTxt, color: "#5fd18a", until: now() + 900 }
+        : ok === false ? { text: made.length > 1 ? `被弾 ${word}${nOk}/${made.length}` : "被弾" + offTxt, color: "#e8664f", until: now() + 900 }
         : { text: made.map((t) => (t.dodge ? CLASSES[t.dodge.cls].name : "なし")).join("・"), color: "#ddd", until: now() + 900 };
       await sleepUntil(last.recoverEnd + 300);
     }
@@ -1438,8 +1538,8 @@ function showResultB() {
     return h + "</table>";
   };
   let h = tbl("予告ごと", r.byTel) + tbl("速さごと", r.bySpeed, spName) + tbl("攻撃の種類ごと", r.byType, (k) => ATK[k].name);
-  h += "<p>どの動きでよけたか（行＝攻撃）</p><table><tr><th></th>" + [...CLASS_IDS.filter((c) => c !== "chudan"), "none"].map((c) => `<th>${c === "none" ? "動きなし" : CLASSES[c].name}</th>`).join("") + "</tr>";
-  for (const k in r.dir) h += `<tr><th>${ATK[k].name}</th>` + [...CLASS_IDS.filter((c) => c !== "chudan"), "none"].map((c) => `<td>${r.dir[k][c] || ""}</td>`).join("") + "</tr>";
+  h += "<p>どの動きでよけたか（行＝攻撃）</p><table><tr><th></th>" + [...DODGE_IDS, "none"].map((c) => `<th>${c === "none" ? "動きなし" : CLASSES[c].name}</th>`).join("") + "</tr>";
+  for (const k in r.dir) h += `<tr><th>${ATK[k].name}</th>` + [...DODGE_IDS, "none"].map((c) => `<td>${r.dir[k][c] || ""}</td>`).join("") + "</tr>";
   h += "</table><p class='mut'>成功1＝何か動いた、成功2＝正解表どおり。時間はms、マイナスは命中より前。今の閾値・正解表で再判定した結果。</p>";
   el.innerHTML = h;
 }
@@ -1447,7 +1547,7 @@ $("b-result-btn").onclick = showResultB;
 $("b-scope").onchange = showResultB;
 function summaryB(lines) {
   const ts = rejudgeB(LOG.trials.filter((t) => t.kind === "labB"));
-  if (!ts.length) { summaryQ6([], lines); return; }
+  if (!ts.length) { summaryQ6([], lines); stage5Summary([], lines); return; }
   const r = analyzeB(ts);
   lines.push("## ラボB（今の閾値・正解表で再判定）", `正解表 ${JSON.stringify(bTable())}`);
   const modes = {}; for (const t of ts) modes[t.mode] = (modes[t.mode] || 0) + 1;
@@ -1507,6 +1607,57 @@ function summaryQ6(ts, lines) {
   }
   swingMaskCompare(lines);
   thresholdSweep(lines);
+  stage5Summary(ts, lines);
+}
+// 段階5（A）：素振りの検出・素振りの間は回避を数えない・弾き。本編と同じ作りの素振り検出を記録した試行（hs3あり）だけで見る
+function stage5Summary(tsB, lines) {
+  const has = (t) => (t.fields || []).includes("hs3");
+  const on = { ...TH, swingMask2: 1 }, off = { ...TH, swingMask2: 0 };
+  const A = LOG.trials.filter((t) => t.kind === "labA" && has(t) && t.backCm == null);
+  const B = LOG.trials.filter((t) => t.kind === "labB" && has(t));
+  const I = LOG.trials.filter((t) => t.kind === "labB-idle" && has(t));
+  if (!A.length && !B.length && !I.length) return;
+  lines.push(`## 段階5 素振りと回避を分ける（素振り検出つきの試行だけ。今は「素振りの間は数えない」=${TH.swingMask2 ? "する" : "しない"}）`);
+  if (A.length) {
+    const rj = (th) => A.map((t) => { const j = judgeFrames(t.frames, t.fields, t.sayT, t.winEnd, th); return { ...t, pred: j.pred, correct: isCorrectA(t.label, j.pred), swings: j.swings }; });
+    const a0 = rj(off), a1 = rj(on);
+    const nd = (xs) => xs.filter((t) => CLASSES[t.label]?.noDodge), dg = (xs) => xs.filter((t) => !CLASSES[t.label]?.noDodge);
+    const r = (xs) => pct(xs.filter((t) => t.correct).length, xs.length);
+    if (nd(a1).length) {
+      lines.push(`ラボA 回避でない動き（素振り・構え直し）${nd(a1).length}回: 正解（回避を拾わない） しない ${r(nd(a0))} → する ${r(nd(a1))}`);
+      for (const id of ["suburiKesa", "suburiYoko", "suburiTsuki", "kamaeNaoshi"]) {
+        const xs = a1.filter((t) => t.label === id); if (!xs.length) continue;
+        const x0 = a0.filter((t) => t.label === id);
+        const cnt = {}; for (const t of xs) cnt[t.pred] = (cnt[t.pred] || 0) + 1;
+        lines.push(`- ${CLASSES[id].name}: ${r(x0)}→${r(xs)}（判定 ${Object.entries(cnt).map(([c, n]) => `${CLASSES[c].name}${n}`).join(" ")}／素振りを拾えた ${pct(xs.filter((t) => t.swings?.length).length, xs.length)}）`);
+      }
+    }
+    if (dg(a1).length) lines.push(`ラボA 回避の動き ${dg(a1).length}回: 正解 しない ${r(dg(a0))} → する ${r(dg(a1))}（本物の回避を消していないか）`);
+  }
+  if (B.length) {
+    const b0 = rejudgeB(B, off), b1 = rejudgeB(B, on);
+    const s = (xs, k) => pct(xs.filter((t) => t[k]).length, xs.length);
+    lines.push(`ラボB 攻撃${B.length}本: 成功1 ${s(b0, "success1")}→${s(b1, "success1")} 成功2 ${s(b0, "success2")}→${s(b1, "success2")}`);
+    const c0 = b0.filter((t) => t.counterCheck), c1 = b1.filter((t) => t.counterCheck);
+    if (c0.length) lines.push(`反撃の素振り${c0.length}回: 素振りを拾えた ${pct(c1.filter((t) => t.counterCheck.swing).length, c1.length)} 素振り中の誤検知 ${pct(c0.filter((t) => t.counterCheck.falsePos.length).length, c0.length)}→${pct(c1.filter((t) => t.counterCheck.falsePos.length).length, c1.length)}`);
+    // 弾き
+    const p = b1.filter((t) => t.mode === "4");
+    const src = p.length ? p : b1;
+    const offs = src.map((t) => t.parryOffset).filter((x) => x != null), abs = offs.map(Math.abs);
+    lines.push(`弾き（${p.length ? "モード4の" : "全"}${src.length}本、素振りあり${offs.length}本）: ずれ 中央${q(offs, 0.5) ?? "-"}ms（10%点 ${q(offs, 0.1) ?? "-"} / 90%点 ${q(offs, 0.9) ?? "-"}、＋は命中より遅い） 絶対値の中央${q(abs, 0.5) ?? "-"}ms`);
+    if (offs.length) lines.push(`  窓ごとの弾きの成功: ${[50, 100, 150, 200, 300].map((w) => `±${w}ms ${pct(abs.filter((x) => x <= w).length, src.length)}`).join("、")}`);
+    if (p.length) {
+      const byT = {}; for (const t of p) { byT[t.type] ||= { n: 0, ok: 0 }; byT[t.type].n++; if (t.success4) byT[t.type].ok++; }
+      lines.push(`  攻撃の種類ごと（±${TH.parryMs}ms）: ${Object.entries(byT).map(([k, x]) => `${ATK[k].name} ${pct(x.ok, x.n)}（${x.n}）`).join("、")}`);
+    }
+  }
+  if (I.length) {
+    const min = I.reduce((s, t) => s + t.durationMs, 0) / 60000;
+    const n0 = I.reduce((s, t) => s + rejudgeIdle(t, off).length, 0), n1 = I.reduce((s, t) => s + rejudgeIdle(t, on).length, 0);
+    const sw = I.reduce((s, t) => s + swingsOf(t.frames, t.fields).length, 0);
+    const w = (n) => Math.round(100 * (1 - Math.exp(-(n / min) / 60 * 1.15)));
+    lines.push(`攻撃なし ${min.toFixed(1)}分（拾った素振り${sw}本）: 誤検知 1分あたり ${(n0 / min).toFixed(1)}回（窓に入る見込み${w(n0)}%） → ${(n1 / min).toFixed(1)}回（${w(n1)}%）`);
+  }
 }
 // 閾値を何倍か厳しくする × 動きが続く時間を長く求める、の総当たり（記録済みのデータを判定し直すだけ）
 // 本物の回避（攻撃の成功）を落とさずに、攻撃なし・反撃中の誤検知をどこまで減らせるかを見る

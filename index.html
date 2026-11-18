@@ -260,8 +260,28 @@ function newLog() {
     trials: [],     // 1試行 = 1オブジェクト
   };
 }
-let LOG;
-try { LOG = JSON.parse(localStorage.getItem(LOG_KEY)) || newLog(); } catch { LOG = newLog(); }
+// ログの置き場所は IndexedDB（v2）。localStorage は約5MBで、実機で満杯になった（段階5、2026-11-18）。
+// IndexedDB が使えないときだけ localStorage に戻す。前の localStorage のログがあれば一度だけ移す
+const idb = {
+  db: null,
+  open() {
+    return new Promise((res) => {
+      try {
+        const rq = indexedDB.open("dodgelab", 1);
+        rq.onupgradeneeded = () => rq.result.createObjectStore("kv");
+        rq.onsuccess = () => { this.db = rq.result; res(true); };
+        rq.onerror = () => res(false);
+      } catch { res(false); }
+    });
+  },
+  get(k) { return new Promise((res) => { try { const r = this.db.transaction("kv").objectStore("kv").get(k); r.onsuccess = () => res(r.result); r.onerror = () => res(undefined); } catch { res(undefined); } }); },
+  put(k, v) { return new Promise((res) => { try { const tx = this.db.transaction("kv", "readwrite"); tx.objectStore("kv").put(v, k); tx.oncomplete = () => res(true); tx.onerror = () => res(false); } catch { res(false); } }); },
+};
+const useIdb = await idb.open();
+let LOG = useIdb ? await idb.get(LOG_KEY) : undefined;
+if (!LOG) { try { LOG = JSON.parse(localStorage.getItem(LOG_KEY)); } catch {} }
+if (LOG && useIdb) { await idb.put(LOG_KEY, LOG); try { localStorage.removeItem(LOG_KEY); } catch {} }
+LOG ||= newLog();
 LOG.calibrations ||= []; LOG.runs ||= []; LOG.trials ||= [];
 const T0 = performance.now(), T0wall = Date.now();
 const now = () => performance.now();
@@ -278,6 +298,10 @@ function saveLogSoon() {
   saveTimer = setTimeout(saveLogNow, 1000);
 }
 function saveLogNow() {
+  if (useIdb) {
+    idb.put(LOG_KEY, LOG).then((ok) => { if (!ok) logWarnOnce("ログを保存できませんでした。ラボCでJSONを保存してから「ログを消す」をしてください"); });
+    return;
+  }
   try { localStorage.setItem(LOG_KEY, JSON.stringify(LOG)); }
   catch (err) { console.warn("ログの保存に失敗", err); logWarnOnce("ログが端末に入りきりません。ラボCでJSONを保存してから「ログを消す」をしてください"); }
 }
@@ -480,7 +504,8 @@ function perfTick() {
   LOG.perf.push({ t: Math.round(now()), sessionId: session?.id, ...shown, body: !!lastPose, speaking: spokeThisSec || !!window.speechSynthesis?.speaking, measuring: busy });
   spokeThisSec = false;
   if (LOG.perf.length > 20000) LOG.perf.splice(0, LOG.perf.length - 20000);
-  saveLogSoon();
+  // 性能の記録だけで毎秒ログ全体を保存すると、ログが大きくなったとき骨格推定の邪魔になるので15秒ごと
+  if (LOG.perf.length % 15 === 0) saveLogSoon();
   const a = session?.actual || {};
   $("hud").textContent =
     `骨格 ${shown.poseFps}fps  推論 ${shown.inferMs}ms（最大${shown.inferMsMax}）\n` +
@@ -731,18 +756,25 @@ function swingsOf(frames, fields, t0 = -Infinity, t1 = Infinity) {
     if (!cur) {
       if (s > SW.START) {
         let j = i; while (j > 0 && fs[j - 1][is] > SW.ONSET) j--;
-        cur = { i0: j, onset: fs[j][0], start: t, peak: s, peakT: t }; low = 0;
+        cur = { i0: j, onset: fs[j][0], start: t, peak: s, peakT: t, far: 0, farD: [0, 0, 0] }; low = 0;
       }
     } else {
       if (s > cur.peak) { cur.peak = s; cur.peakT = t; }
+      // 動いた幅は「始点から一番遠くへ行った距離」で測る（v2）。
+      //   初版は始点と終点の距離で測っていて、構え→振る→構えに戻る素振りを「幅が足りない」と捨てていた。
+      //   本編は振りかぶりと振り下ろしを折り返しで2本に分けてから幅を見るので、捨てられない
+      const a = fs[cur.i0], d = [f[ixx] - a[ixx], f[iy] - a[iy], f[iz] - a[iz]], dd = Math.hypot(...d);
+      if (dd > cur.far) { cur.far = dd; cur.farD = d; }
       if (s < SW.STOP) low = low || t; else low = 0;
       if ((low && t - low > 80) || t - cur.start > SW.MAX_MS) {
-        const a = fs[cur.i0], b = f, d = [b[ixx] - a[ixx], b[iy] - a[iy], b[iz] - a[iz]], amp = Math.hypot(...d);
-        if (amp >= SW.MIN_AMP && cur.onset <= t1) out.push({ onset: cur.onset, start: cur.start, peakT: cur.peakT, end: t, peak: +cur.peak.toFixed(2), amp: +amp.toFixed(2), dir: d.map((x) => +(x / amp).toFixed(2)) });
+        const amp = cur.far;
+        if (amp >= SW.MIN_AMP && cur.onset <= t1) out.push({ onset: cur.onset, start: cur.start, peakT: cur.peakT, end: t, peak: +cur.peak.toFixed(2), amp: +amp.toFixed(2), dir: cur.farD.map((x) => +(x / amp).toFixed(2)) });
         cur = null;
       }
     }
   }
+  // 記録の終わりで振り終わっていない素振りも数える
+  if (cur && cur.far >= SW.MIN_AMP && cur.onset <= t1) out.push({ onset: cur.onset, start: cur.start, peakT: cur.peakT, end: fs.at(-1)[0], peak: +cur.peak.toFixed(2), amp: +cur.far.toFixed(2), dir: cur.farD.map((x) => +(x / cur.far).toFixed(2)), cut: true });
   return out.filter((s) => s.end >= t0);
 }
 // 素振りの間（始まり−100ms〜終わり＋250ms）かどうかを、コマごとに印を付ける
@@ -1646,6 +1678,11 @@ function stage5Summary(tsB, lines) {
     const offs = src.map((t) => t.parryOffset).filter((x) => x != null), abs = offs.map(Math.abs);
     lines.push(`弾き（${p.length ? "モード4の" : "全"}${src.length}本、素振りあり${offs.length}本）: ずれ 中央${q(offs, 0.5) ?? "-"}ms（10%点 ${q(offs, 0.1) ?? "-"} / 90%点 ${q(offs, 0.9) ?? "-"}、＋は命中より遅い） 絶対値の中央${q(abs, 0.5) ?? "-"}ms`);
     if (offs.length) lines.push(`  窓ごとの弾きの成功: ${[50, 100, 150, 200, 300].map((w) => `±${w}ms ${pct(abs.filter((x) => x <= w).length, src.length)}`).join("、")}`);
+    // 素振り検出の確かめ：命中の前後（-1.5〜+0.8秒）の手の3Dの速さの最大と、拾った素振りの幅
+    const ihs = (t) => (t.fields || []).indexOf("hs3") + 1;
+    const mx = src.map((t) => { const i = ihs(t), v = t.frames.filter((f) => f[0] >= t.hitT - 1500 && f[0] <= t.hitT + 800).map((f) => f[i]); return v.length ? Math.max(...v) : 0; });
+    const amps = src.flatMap((t) => t.swings || []).map((s) => s.amp);
+    lines.push(`  確かめ：命中の前後の手の3Dの速さの最大 中央${(q(mx, 0.5) ?? 0).toFixed(1)}m/秒（10%点 ${(q(mx, 0.1) ?? 0).toFixed(1)}、1.6を越えた ${mx.filter((x) => x > SW.START).length}/${src.length}本）／拾った素振りの幅 中央${q(amps, 0.5) ?? "-"}m（${amps.length}本）`);
     if (p.length) {
       const byT = {}; for (const t of p) { byT[t.type] ||= { n: 0, ok: 0 }; byT[t.type].n++; if (t.success4) byT[t.type].ok++; }
       lines.push(`  攻撃の種類ごと（±${TH.parryMs}ms）: ${Object.entries(byT).map(([k, x]) => `${ATK[k].name} ${pct(x.ok, x.n)}（${x.n}）`).join("、")}`);

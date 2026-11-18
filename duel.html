@@ -1,0 +1,972 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>拍の決闘ラボ</title>
+<style>
+  :root { --bg:#111; --fg:#eee; --mut:#999; --ok:#5fd18a; --ng:#e8664f; --acc:#f2c14e; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font-family: -apple-system, "Hiragino Sans", sans-serif; }
+  body { display:flex; flex-direction:column; overflow:hidden; }
+  nav { display:flex; gap:4px; padding:6px; padding-top:max(6px, env(safe-area-inset-top)); background:#000; }
+  nav button { flex:1; padding:10px 2px; font-size:13px; background:#222; color:var(--fg); border:1px solid #333; border-radius:6px; }
+  nav button.on { background:var(--acc); color:#000; font-weight:bold; }
+  #ver { align-self:center; font-size:10px; color:#888; white-space:nowrap; }
+  #stage { position:relative; flex:1; min-height:140px; background:#000; }
+  #video, #overlay { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; transform:scaleX(-1); }
+  #hud { position:absolute; left:6px; top:6px; font:11px/1.35 ui-monospace, Menlo, monospace; background:rgba(0,0,0,.6); padding:5px 7px; border-radius:6px; white-space:pre; pointer-events:none; }
+  #big { position:absolute; left:0; right:0; bottom:34px; text-align:center; font-size:48px; font-weight:bold; text-shadow:0 0 8px #000, 0 0 4px #000; pointer-events:none; }
+  #sub { position:absolute; left:0; right:0; bottom:6px; text-align:center; font-size:15px; color:#ccc; text-shadow:0 0 6px #000; pointer-events:none; }
+  #cue { position:absolute; left:0; right:0; top:22%; text-align:center; font-size:60px; font-weight:bold; color:var(--acc); text-shadow:0 0 10px #000; pointer-events:none; }
+  #msg { position:absolute; left:0; right:0; top:40%; text-align:center; font-size:18px; padding:0 16px; }
+  #btn-stop { position:absolute; left:8px; bottom:8px; z-index:3; display:none; padding:12px 16px; font-size:16px; background:#333; color:#fff; border:1px solid #666; border-radius:8px; }
+  body.running nav, body.running .panel { display:none !important; }
+  body.running #btn-stop { display:block; }
+  body.running #big { font-size:72px; bottom:60px; }
+  body.running #sub { font-size:20px; bottom:20px; }
+  .panel { padding:8px; background:#181818; border-top:1px solid #333; max-height:50vh; overflow:auto; }
+  .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:4px 0; }
+  .row label { font-size:13px; color:var(--mut); }
+  button.b { padding:10px 12px; font-size:15px; background:#2c2c2c; color:var(--fg); border:1px solid #444; border-radius:6px; }
+  button.b.main { background:var(--acc); color:#000; font-weight:bold; }
+  button.b.s { padding:6px 8px; font-size:13px; }
+  button.b:disabled { opacity:.4; }
+  select, input[type=number] { padding:8px; font-size:14px; background:#222; color:var(--fg); border:1px solid #444; border-radius:6px; }
+  textarea { width:100%; height:220px; font:11px ui-monospace, Menlo, monospace; background:#000; color:#ddd; border:1px solid #333; }
+  details { margin:6px 0; border:1px solid #333; border-radius:6px; padding:4px 6px; }
+  summary { font-size:14px; padding:4px 0; }
+  .mut { color:var(--mut); font-size:12px; }
+  table { border-collapse:collapse; font-size:12px; }
+  td, th { border:1px solid #333; padding:3px 5px; text-align:right; white-space:nowrap; }
+  th { background:#222; font-weight:normal; }
+  td.diag { background:#1f3a29; } td.bad { background:#4a2320; }
+  .scroll { overflow:auto; max-width:100%; }
+  .stat { font-size:13px; line-height:1.6; }
+  .stat b { color:var(--acc); font-weight:normal; }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<nav>
+  <button data-tab="prep" class="on">準備</button>
+  <button data-tab="kamae">構え</button>
+  <button data-tab="timing">拍の調整</button>
+  <button data-tab="anchor">構え直し</button>
+  <button data-tab="log">記録</button>
+  <span id="ver">版 読込中</span>
+</nav>
+
+<div id="stage">
+  <video id="video" playsinline muted></video>
+  <canvas id="overlay"></canvas>
+  <div id="hud">カメラ停止中</div>
+  <div id="cue"></div>
+  <div id="big"></div>
+  <div id="sub"></div>
+  <div id="msg">下の「カメラ開始」を押してください</div>
+  <button id="btn-stop">止める</button>
+</div>
+
+<!-- 準備 -->
+<div class="panel" id="p-prep">
+  <div class="row">
+    <button class="b main" id="btn-cam">カメラ開始</button>
+    <button class="b" id="btn-voice">音の確認</button>
+  </div>
+  <div class="stat" id="prep-state"></div>
+  <details><summary>カメラの設定</summary>
+    <div class="row">
+      <label>解像度</label>
+      <select id="sel-res"><option value="640x480" selected>640×480</option><option value="1280x720">1280×720</option></select>
+      <label>FPS</label>
+      <select id="sel-fps"><option value="30">30</option><option value="60" selected>60</option></select>
+      <label>モデル</label>
+      <select id="sel-model"><option value="lite" selected>lite</option><option value="full">full</option></select>
+    </div>
+  </details>
+  <div class="mut">拍の決闘ラボ（使い捨ての実験）。段階1：構えの登録・拍のタイミング調整・構え直し。
+    スマホは縦置き、カメラから2〜3m離れて全身が映る位置で。開始のボタンを押したあとは音声で進みます。左下の「止める」でいつでも止まります。</div>
+</div>
+
+<!-- 構え -->
+<div class="panel" id="p-kamae" hidden>
+  <div class="row">
+    <button class="b main" id="btn-reg-all">構えを全部登録（約50秒）</button>
+  </div>
+  <div class="mut">中段→上段→下段→八相→刀立て の順に、それぞれ3秒止まって記録します。中段は、回避の指標の基準（胴の長さなど）にも使います。刀立ては構えではありませんが、八相との取り違えを調べるために登録します。</div>
+  <div class="row" id="reg-one"></div>
+  <div class="row">
+    <label>試合で使う構え</label>
+    <select id="sel-kamae"><option value="jodan">上段</option><option value="chudan" selected>中段</option><option value="gedan">下段</option><option value="hasso">八相</option></select>
+  </div>
+  <details open><summary>登録した構え（平均）</summary><div class="scroll"><table id="tpl-table"></table></div>
+    <div class="mut">手の横：+が自分の右（胴の長さ比）／手の高さ：+が肩より下／両手の間・縦の差：胴の長さ比／手の前：m÷胴の長さ（+がカメラ側）</div>
+  </details>
+  <details open><summary>今の姿勢</summary><div class="scroll"><table id="live-table"></table></div></details>
+  <div class="row">
+    <button class="b main" id="btn-check">構えの確かめ</button>
+    <label>各</label><input type="number" id="num-check" value="2" min="1" max="10" style="width:4em"><label>回</label>
+  </div>
+  <div class="mut">読み上げた構え（刀立てを含む5つ）を順にとり、見分けられたかを数えます。八相と刀立ての取り違えを特に見ます。</div>
+  <div id="check-result"></div>
+</div>
+
+<!-- 拍のタイミング調整 -->
+<div class="panel" id="p-timing" hidden>
+  <div class="row">
+    <label>1拍</label>
+    <select id="sel-beat"></select>
+    <label>振る回数</label><input type="number" id="num-swings" value="8" min="4" max="20" style="width:4em">
+    <button class="b main" id="btn-timing">タイミング調整</button>
+  </div>
+  <div class="mut">「カッ」4つで数えたあと、「ドン（大きい太鼓）・カッ（小さい音）」を繰り返します。ドンに合わせて振り下ろし、カッの間に構えに戻ってください。
+    素振りの速さの山の時刻と、ドンの時刻のずれの中央値を、その拍の長さの調整値として保存します（やり直すと上書き）。</div>
+  <div class="stat" id="timing-state"></div>
+  <div id="timing-result"></div>
+</div>
+
+<!-- 構え直し -->
+<div class="panel" id="p-anchor" hidden>
+  <div class="row">
+    <button class="b main" id="btn-anchor">構え直しのテスト</button>
+    <label>回数</label><input type="number" id="num-anchor" value="4" min="1" max="10" style="width:4em">
+  </div>
+  <div class="mut">「構え直し」の声で、試合で使う構えのまま1秒止まります。その姿勢を回避の指標の基準にします。そのあと5秒は自由に動いてください（1歩ずれた位置で構え直しても、構え直したあとは「構え」と出れば成功）。
+    回避の名前は前回のラボの閾値による仮の表示です（かがみ左右は未定のため「上体・左／右」と出します）。</div>
+  <div id="anchor-result"></div>
+</div>
+
+<!-- 記録 -->
+<div class="panel" id="p-log" hidden>
+  <div class="row">
+    <button class="b main" id="btn-copy">要約をコピー</button>
+    <button class="b" id="btn-refresh">要約を更新</button>
+    <button class="b" id="btn-dl-json">JSONを保存</button>
+    <button class="b" id="btn-clear">ログを消す</button>
+  </div>
+  <textarea id="summary" readonly></textarea>
+</div>
+
+<script type="module">
+// 拍の決闘ラボ（使い捨ての実験）。本編（suburi-bugeicho）のファイルは読み込まない。
+// 骨格推定・指標・素振りの検出は、同じフォルダの回避判定ラボ（index.html v4）から写したもの。
+const $ = (id) => document.getElementById(id);
+const VERSION = "duel-1a 2026-11-18";
+const VISION = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+const MODELS = {
+  lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+  full: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task",
+};
+// 設定は毎回読み直す（キャッシュで古い設定が使われないように）
+const CFG = (await import(`./duel-config.js?v=${Date.now()}`)).default;
+const J = CFG.judge;
+const LOG_KEY = "duellab.log.v1", TPL_KEY = "duellab.kamae.v1", CAL_KEY = "duellab.cal.v1", TIMING_KEY = "duellab.timing.v1", SEL_KEY = "duellab.sel.v1";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const lsGet = (k) => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+
+// ---------- ログ（IndexedDB。だめなら localStorage） ----------
+function newLog() {
+  return {
+    version: 1, createdAt: new Date().toISOString(),
+    device: { ua: navigator.userAgent, screen: { w: screen.width, h: screen.height, dpr: devicePixelRatio } },
+    sessions: [], events: [], perf: [],
+    kamaeRegs: [],    // 構えの登録1回ずつ
+    kamaeChecks: [],  // 構えの確かめの1試行ずつ
+    timingRuns: [],   // タイミング調整1回ずつ
+    anchorTests: [],  // 構え直しの1回ずつ
+  };
+}
+const idb = {
+  db: null,
+  open() {
+    return new Promise((res) => {
+      try {
+        const rq = indexedDB.open("duellab", 1);
+        rq.onupgradeneeded = () => rq.result.createObjectStore("kv");
+        rq.onsuccess = () => { this.db = rq.result; res(true); };
+        rq.onerror = () => res(false);
+      } catch { res(false); }
+    });
+  },
+  get(k) { return new Promise((res) => { try { const r = this.db.transaction("kv").objectStore("kv").get(k); r.onsuccess = () => res(r.result); r.onerror = () => res(undefined); } catch { res(undefined); } }); },
+  put(k, v) { return new Promise((res) => { try { const tx = this.db.transaction("kv", "readwrite"); tx.objectStore("kv").put(v, k); tx.oncomplete = () => res(true); tx.onerror = () => res(false); } catch { res(false); } }); },
+};
+const within = (p, ms, v) => Promise.race([p, new Promise((r) => setTimeout(() => r(v), ms))]);
+const useIdb = await within(idb.open(), 2000, false);
+let LOG = useIdb ? await within(idb.get(LOG_KEY), 3000, undefined) : lsGet(LOG_KEY);
+LOG ||= newLog();
+for (const k of ["sessions", "events", "perf", "kamaeRegs", "kamaeChecks", "timingRuns", "anchorTests"]) LOG[k] ||= [];
+$("ver").textContent = `版 ${VERSION}`;
+const T0 = performance.now(), T0wall = Date.now();
+const now = () => performance.now();
+const iso = (t = now()) => new Date(T0wall + (t - T0)).toISOString();
+let saveTimer = 0;
+function saveLogSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(saveLogNow, 1000); }
+function saveLogNow() {
+  if (useIdb) { idb.put(LOG_KEY, LOG); return; }
+  try { localStorage.setItem(LOG_KEY, JSON.stringify(LOG)); } catch { console.warn("ログを保存できません"); }
+}
+function logEvent(type, data = {}) { LOG.events.push({ t: Math.round(now()), at: iso(), type, ...data }); if (LOG.events.length > 5000) LOG.events.splice(0, 1000); saveLogSoon(); }
+logEvent("page_open", { version: VERSION });
+
+// ---------- 音（読み上げ・電子音・太鼓） ----------
+let ac = null, jaVoice = null;
+function unlockAudio() {
+  if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch {} }
+  if (ac && ac.state === "suspended") ac.resume();
+  if (window.speechSynthesis && !unlockAudio.done) { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); unlockAudio.done = true; }
+}
+function pickVoice() {
+  const vs = window.speechSynthesis ? speechSynthesis.getVoices() : [];
+  jaVoice = vs.find((v) => /ja/i.test(v.lang) && /Kyoko|O-ren|Otoya|Hattori/i.test(v.name)) || vs.find((v) => /ja/i.test(v.lang)) || null;
+}
+if (window.speechSynthesis) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+// 読み上げて、読み終わるまで待つ（onend が来ない端末のために目安の時間で打ち切る）
+function say(text) {
+  return new Promise((resolve) => {
+    logEvent("say", { text });
+    if (!window.speechSynthesis) return resolve();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "ja-JP"; if (jaVoice) u.voice = jaVoice; u.rate = 1.15; u.volume = 1;
+    let done = false; const fin = () => { if (!done) { done = true; resolve(); } };
+    u.onend = fin; setTimeout(fin, 800 + text.length * 200);
+    speechSynthesis.cancel(); speechSynthesis.speak(u);
+  });
+}
+function beep(f = 880, ms = 120, vol = 0.4) {
+  if (!ac) return;
+  const o = ac.createOscillator(), g = ac.createGain(), t = ac.currentTime;
+  o.type = "square"; o.frequency.value = f;
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + ms / 1000);
+  o.connect(g).connect(ac.destination); o.start(t); o.stop(t + ms / 1000 + 0.02);
+}
+let noiseBuf = null;
+function noise() {
+  if (noiseBuf) return noiseBuf;
+  noiseBuf = ac.createBuffer(1, Math.round(ac.sampleRate * 0.1), ac.sampleRate);
+  const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  return noiseBuf;
+}
+// 太鼓。at は AudioContext の時刻（秒）。big=true がドン（大きい太鼓）、false がカッ（縁）
+function drumAt(at, big = true) {
+  if (!ac) return;
+  const g = ac.createGain(); g.connect(ac.destination);
+  if (big) {
+    const o = ac.createOscillator(); o.type = "sine";
+    o.frequency.setValueAtTime(150, at); o.frequency.exponentialRampToValueAtTime(55, at + 0.2);
+    g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(1.0, at + 0.004); g.gain.exponentialRampToValueAtTime(0.001, at + 0.4);
+    o.connect(g); o.start(at); o.stop(at + 0.45);
+    const s = ac.createBufferSource(); s.buffer = noise();
+    const f = ac.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = 1000;
+    const g2 = ac.createGain(); g2.gain.setValueAtTime(0.6, at); g2.gain.exponentialRampToValueAtTime(0.001, at + 0.06);
+    s.connect(f).connect(g2).connect(ac.destination); s.start(at); s.stop(at + 0.08);
+  } else {
+    const o = ac.createOscillator(); o.type = "triangle"; o.frequency.setValueAtTime(950, at);
+    g.gain.setValueAtTime(0.0001, at); g.gain.exponentialRampToValueAtTime(0.35, at + 0.003); g.gain.exponentialRampToValueAtTime(0.001, at + 0.07);
+    o.connect(g); o.start(at); o.stop(at + 0.1);
+  }
+}
+$("btn-voice").onclick = async () => {
+  unlockAudio();
+  const a = ac.currentTime + 0.1;
+  drumAt(a, false); drumAt(a + 0.6, true); drumAt(a + 1.2, false); drumAt(a + 1.8, true);
+  await sleep(2400); say("音の確認。中段。");
+};
+
+// ---------- 走らせ中の制御（ハンズフリー） ----------
+let busy = false, stopFlag = false;
+const STOP = new Error("stop");
+async function wait(ms) { const end = now() + ms; while (now() < end) { if (stopFlag) throw STOP; await sleep(Math.min(50, end - now())); } }
+async function waitUntil(t) { await wait(t - now()); }
+function needReady({ kamae = false } = {}) {
+  if (!running) { alert("先に「準備」で「カメラ開始」を押してください"); return false; }
+  if (kamae && !TPL[selKamae()]) { alert("先に「構え」で構えを登録してください"); return false; }
+  if (busy) return false;
+  return true;
+}
+function beginRun() { unlockAudio(); busy = true; stopFlag = false; document.body.classList.add("running"); }
+function endRun() { busy = false; capture = null; $("cue").textContent = ""; document.body.classList.remove("running"); }
+$("btn-stop").onclick = () => { stopFlag = true; window.speechSynthesis?.cancel(); };
+
+// ---------- カメラ＋骨格推定 ----------
+const video = $("video"), cv = $("overlay"), ctx = cv.getContext("2d");
+let stream = null, landmarker = null, landmarkerKey = "", delegate = "", running = false, lastVideoTime = -1, wakeLock = null, session = null;
+let camFrames = 0, poseFrames = 0, inferSum = 0, inferMax = 0, perfTimer = 0;
+let shown = { poseFps: 0, camFps: 0, inferMs: 0 };
+async function loadLandmarker(kind) {
+  if (window.__fakePose) { delegate = "fake"; return; } // PCでの動作確認用
+  if (landmarker && landmarkerKey === kind) return;
+  if (landmarker) { try { landmarker.close(); } catch {} landmarker = null; }
+  const vision = await import(`${VISION}/vision_bundle.mjs`);
+  const files = await vision.FilesetResolver.forVisionTasks(`${VISION}/wasm`);
+  const opts = (d) => ({ baseOptions: { modelAssetPath: MODELS[kind], delegate: d }, runningMode: "VIDEO", numPoses: 1 });
+  try { landmarker = await vision.PoseLandmarker.createFromOptions(files, opts("GPU")); delegate = "GPU"; }
+  catch (e) { console.warn("GPU不可、CPUで動かします", e); landmarker = await vision.PoseLandmarker.createFromOptions(files, opts("CPU")); delegate = "CPU"; }
+  landmarkerKey = kind;
+}
+async function startCamera() {
+  unlockAudio();
+  const msg = $("msg"); msg.hidden = false;
+  if (!navigator.mediaDevices?.getUserMedia) { msg.textContent = "このブラウザはカメラに対応していません（https で開いてください）"; return; }
+  const [w, h] = $("sel-res").value.split("x").map(Number);
+  const fps = +$("sel-fps").value, model = $("sel-model").value;
+  $("btn-cam").disabled = true; msg.textContent = "カメラを開いています…";
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: fps } }, audio: false }); }
+  catch (e) { stream = null; $("btn-cam").disabled = false; msg.textContent = "カメラを開けません: " + (e.name || e); return; }
+  video.srcObject = stream; await video.play();
+  try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {}
+  msg.textContent = "骨格推定のモデルを読み込んでいます…";
+  try { await loadLandmarker(model); }
+  catch (e) { msg.textContent = "モデルを読み込めません: " + e; stopCamera(); return; }
+  const st = stream.getVideoTracks()[0].getSettings?.() || {};
+  session = { id: LOG.sessions.length + 1, startAt: iso(), model, delegate, actual: { width: st.width ?? video.videoWidth, height: st.height ?? video.videoHeight, frameRate: st.frameRate ?? null } };
+  LOG.sessions.push(session); logEvent("camera_start", { sessionId: session.id });
+  msg.hidden = true;
+  $("btn-cam").textContent = "カメラ停止"; $("btn-cam").disabled = false;
+  camFrames = poseFrames = inferSum = inferMax = 0;
+  running = true; countCamFrames();
+  const lg = ++loopGen; requestAnimationFrame(() => loop(lg));
+  clearInterval(perfTimer); perfTimer = setInterval(perfTick, 1000);
+  showPrep();
+}
+function stopCamera() {
+  running = false; clearInterval(perfTimer);
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  stream = null; video.srcObject = null;
+  try { wakeLock?.release(); } catch {} wakeLock = null;
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  $("btn-cam").textContent = "カメラ開始"; $("btn-cam").disabled = false;
+  $("msg").hidden = false; $("msg").textContent = "カメラ停止中"; $("hud").textContent = "カメラ停止中"; $("big").textContent = ""; $("sub").textContent = "";
+  showPrep();
+}
+$("btn-cam").onclick = () => (stream ? stopCamera() : startCamera());
+let camGen = 0, newFrame = false;
+function countCamFrames() {
+  if (!running) return;
+  const gen = ++camGen;
+  if (video.requestVideoFrameCallback) {
+    const cb = () => { if (!running || gen !== camGen) return; camFrames++; newFrame = true; video.requestVideoFrameCallback(cb); };
+    video.requestVideoFrameCallback(cb); countCamFrames.rvfc = true;
+  } else countCamFrames.rvfc = false;
+}
+let loopGen = 0;
+function loop(gen) {
+  if (!running || gen !== loopGen) return;
+  try {
+    const fresh = countCamFrames.rvfc ? newFrame : video.currentTime !== lastVideoTime;
+    if (video.readyState >= 2 && fresh) {
+      lastVideoTime = video.currentTime; newFrame = false;
+      const t0 = now();
+      const res = window.__fakePose ? window.__fakePose(t0) : landmarker.detectForVideo(video, t0);
+      const dt = now() - t0;
+      poseFrames++; inferSum += dt; if (dt > inferMax) inferMax = dt;
+      if (cv.width !== video.videoWidth) { cv.width = video.videoWidth; cv.height = video.videoHeight; }
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      const lm = res.landmarks && res.landmarks[0], wl = res.worldLandmarks && res.worldLandmarks[0];
+      if (lm) drawSkeleton(lm);
+      onPose(lm, wl, t0);
+    }
+  } catch (e) { console.error(e); }
+  requestAnimationFrame(() => loop(gen));
+}
+const BONES = [[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[0,11],[0,12]];
+function drawSkeleton(lm) {
+  const W = cv.width, H = cv.height;
+  ctx.lineWidth = Math.max(2, W / 180); ctx.lineCap = "round"; ctx.strokeStyle = "rgba(95,209,138,.9)";
+  for (const [a, b] of BONES) {
+    const p = lm[a], q = lm[b];
+    if ((p.visibility ?? 1) < 0.3 || (q.visibility ?? 1) < 0.3) continue;
+    ctx.beginPath(); ctx.moveTo(p.x * W, p.y * H); ctx.lineTo(q.x * W, q.y * H); ctx.stroke();
+  }
+  ctx.fillStyle = "#f2c14e";
+  for (const i of [0, 11, 12, 13, 14, 15, 16, 23, 24]) {
+    const p = lm[i]; if ((p.visibility ?? 1) < 0.3) continue;
+    ctx.beginPath(); ctx.arc(p.x * W, p.y * H, Math.max(3, W / 120), 0, Math.PI * 2); ctx.fill();
+  }
+}
+function perfTick() {
+  shown = { poseFps: poseFrames, camFps: camFrames, inferMs: poseFrames ? +(inferSum / poseFrames).toFixed(1) : 0, inferMsMax: +inferMax.toFixed(1) };
+  camFrames = poseFrames = inferSum = inferMax = 0;
+  LOG.perf.push({ t: Math.round(now()), sessionId: session?.id, ...shown, body: !!lastR, busy });
+  if (LOG.perf.length > 5000) LOG.perf.splice(0, 1000);
+  if (LOG.perf.length % 15 === 0) saveLogSoon();
+  const a = session?.actual || {};
+  $("hud").textContent = `骨格 ${shown.poseFps}fps 推論 ${shown.inferMs}ms\nカメラ ${a.width}×${a.height} ${session?.model}/${delegate}`;
+}
+
+// =====================================================================
+// 姿勢の量（回避判定ラボ v4 から写したもの）
+// =====================================================================
+// 座標の約束：MediaPipe の元の映像（左右反転なし）。元の映像の x が大きい方 = プレイヤー自身の左。
+// 長さの単位は胴の長さ（肩の中点〜腰の中点）。
+const P = (lm, i) => ({ x: lm[i].x, y: lm[i].y, v: lm[i].visibility ?? 1 });
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+const TORSO_M = 1.70 * 0.29; // 身長170cmと決め打ち（前回のラボと同じ）
+function raw(lm, wl) {
+  const ar = (video.videoWidth || 1) / (video.videoHeight || 1);
+  const Q = (i) => { const p = P(lm, i); return { x: p.x * ar, y: p.y, v: p.v }; };
+  const ls = Q(11), rs = Q(12), lh = Q(23), rh = Q(24), lw = Q(15), rw = Q(16), la = Q(27), ra = Q(28);
+  if (ls.v < 0.5 || rs.v < 0.5 || lh.v < 0.4 || rh.v < 0.4) return null;
+  const sm = mid(ls, rs), hm = mid(lh, rh);
+  const T = dist(sm, hm), sw = dist(ls, rs);
+  const vl = Math.max(0.05, lw.v), vr = Math.max(0.05, rw.v);
+  const hand = { x: (lw.x * vl + rw.x * vr) / (vl + vr), y: (lw.y * vl + rw.y * vr) / (vl + vr) };
+  const leg = la.v > 0.5 && ra.v > 0.5 ? dist(hm, mid(la, ra)) : null;
+  let dz = null, handZ = null, leanZ = null;
+  if (wl) {
+    dz = wl[12].z - wl[11].z;
+    leanZ = (wl[11].z + wl[12].z) / 2 - (wl[23].z + wl[24].z) / 2;
+    handZ = ((wl[11].z + wl[12].z) / 2) - ((wl[15].z * vl + wl[16].z * vr) / (vl + vr)); // +が前（カメラ側）
+  }
+  return {
+    smx: sm.x, smy: sm.y, hmx: hm.x, hmy: hm.y, T, sw, leg, dz, leanZ, handZ,
+    // 構えを見分ける量（その時の胴の長さで割るので、カメラからの距離や立ち位置によらない）
+    kx: -(hand.x - sm.x) / T,      // 手の横：+が自分の右
+    ky: (hand.y - sm.y) / T,       // 手の高さ：+が肩より下
+    gap: dist(lw, rw) / T,         // 両手の間
+    gapY: Math.abs(lw.y - rw.y) / T, // 両手の縦の差
+    kz: handZ == null ? 0 : handZ / TORSO_M, // 手の前（胴の長さ比）
+  };
+}
+// 回避の指標（基準 CAL と位置の基準 anchor からの差）
+function metrics(r, cal, anc) {
+  const backT = 1 - r.T / anc.T;
+  const backLeg = r.leg && anc.leg ? 1 - r.leg / anc.leg : null;
+  return {
+    shift: (r.smx - anc.smx) / cal.T,
+    drop: (r.smy - anc.smy) / cal.T,
+    back: backLeg == null ? backT : (backT + backLeg) / 2,
+    hipShift: (r.hmx - anc.hmx) / cal.T,
+    leanX: ((r.smx - r.hmx) - (anc.smx - anc.hmx)) / cal.T,
+    leanZ: r.leanZ == null || anc.leanZ == null ? 0 : r.leanZ - anc.leanZ,
+  };
+}
+// 手首の3D（本編の素振り検出と同じ作り。腰が原点、x+が右、y+が下、z+がカメラ側で1.5倍）
+let kScale3 = 0;
+function hand3Of(wl) {
+  if (!wl) return null;
+  const m3 = (a, b) => [(a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2];
+  const sm = m3(wl[11], wl[12]), hm = m3(wl[23], wl[24]);
+  const torsoW = Math.hypot(sm[0] - hm[0], sm[1] - hm[1], sm[2] - hm[2]);
+  if (torsoW > 0.15) { const k = TORSO_M / torsoW; kScale3 = kScale3 ? kScale3 * 0.95 + k * 0.05 : k; }
+  const a = wl[15], b = wl[16], vl = Math.max(0.05, a.visibility ?? 1), vr = Math.max(0.05, b.visibility ?? 1), s = kScale3 || 1;
+  return [-((a.x * vl + b.x * vr) / (vl + vr)) * s, ((a.y * vl + b.y * vr) / (vl + vr)) * s, -((a.z * vl + b.z * vr) / (vl + vr)) * s * 1.5];
+}
+function shoulder3Of(wl) {
+  if (!wl || !kScale3) return null;
+  const s = kScale3, a = wl[11], b = wl[12];
+  return [-((a.x + b.x) / 2) * s, ((a.y + b.y) / 2) * s, -((a.z + b.z) / 2) * s * 1.5];
+}
+
+// ---------- 1コマごとの処理 ----------
+// frames に残す量（この順の配列。先頭は時刻）
+const FIELDS = ["kx", "ky", "gap", "gapY", "kz", "shift", "drop", "back", "hipShift", "leanX", "leanZ", "hr3", "r3x", "r3y", "r3z"];
+let CAL = lsGet(CAL_KEY);
+let anchor = CAL ? { ...CAL } : null;
+const recentRaw = [];
+let lastR = null, live = null, rel3s = null, lastDraw = 0;
+let capture = null; // { frames: [], miss: [] } 走らせ中だけ
+function onPose(lm, wl, t) {
+  const r = lm ? raw(lm, wl) : null;
+  lastR = r;
+  if (!r) {
+    if (capture) capture.miss.push(Math.round(t));
+    live = null;
+    if (!busy) { $("big").textContent = lm ? "肩・腰が見えない" : "体が見えない"; $("big").style.color = "#e8664f"; $("sub").textContent = ""; }
+    return;
+  }
+  recentRaw.push({ t, r }); while (recentRaw.length && t - recentRaw[0].t > 3500) recentRaw.shift();
+  const m = CAL && anchor ? metrics(r, CAL, anchor) : { shift: 0, drop: 0, back: 0, hipShift: 0, leanX: 0, leanZ: 0 };
+  // 肩の中点から見た手首（前回のラボ v3 と同じならし方）
+  const h3 = hand3Of(wl), s3 = shoulder3Of(wl);
+  if (h3 && s3) {
+    const x = [h3[0] - s3[0], h3[1] - s3[1], h3[2] - s3[2]];
+    if (!rel3s) rel3s = { t, p: x, s: 0 };
+    else {
+      const dt = (t - rel3s.t) / 1000;
+      const p = [rel3s.p[0] * 0.45 + x[0] * 0.55, rel3s.p[1] * 0.45 + x[1] * 0.55, rel3s.p[2] * 0.6 + x[2] * 0.4];
+      const v = dt > 0 ? Math.hypot(p[0] - rel3s.p[0], p[1] - rel3s.p[1], p[2] - rel3s.p[2]) / dt : 0;
+      rel3s = { t, p, s: rel3s.s * 0.4 + v * 0.6 };
+    }
+  }
+  const cur = { kx: r.kx, ky: r.ky, gap: r.gap, gapY: r.gapY, kz: r.kz, ...m, hr3: rel3s?.s ?? 0, r3x: rel3s?.p[0] ?? 0, r3y: rel3s?.p[1] ?? 0, r3z: rel3s?.p[2] ?? 0 };
+  // 軽くならす（3Dの手は、もうならしてある）
+  live = live ? Object.fromEntries(FIELDS.map((k) => [k, k === "hr3" || k.startsWith("r3") ? cur[k] : live[k] * 0.5 + cur[k] * 0.5])) : cur;
+  live.t = t;
+  if (capture) capture.frames.push([Math.round(t), ...FIELDS.map((k) => +live[k].toFixed(3))]);
+  if (!busy || showLiveDuringRun) showLive(t);
+}
+let showLiveDuringRun = false;
+// 大きな文字：素振り中なら「素振り」、そうでなければ構えの見分け（＋構え直しのあとは仮の回避）
+function showLive(t) {
+  if (!live) return;
+  const mk = matchKamae(live);
+  let txt, col;
+  if (live.hr3 > J.swing.start) { txt = "素振り"; col = "#9fb4c8"; }
+  else if (liveDefenseOn) {
+    const d = provisionalDefense(live, mk);
+    txt = d.name; col = d.color;
+  } else if (mk.best) { txt = KAMAE_NAME[mk.best]; col = mk.best === "tachi" ? "#7cc7ff" : "#5fd18a"; }
+  else if (Object.keys(TPL).length) { txt = "構えなし"; col = "#ddd"; }
+  else { txt = "（構え未登録）"; col = "#999"; }
+  $("big").textContent = txt; $("big").style.color = col;
+  if (t - lastDraw > 150) {
+    lastDraw = t;
+    $("sub").textContent = mk.ds.length ? mk.ds.slice(0, 3).map((d) => `${KAMAE_NAME[d.id]} ${d.d.toFixed(1)}`).join("  ") : "";
+    if (!$("p-kamae").hidden) drawLiveTable(mk);
+  }
+}
+
+// =====================================================================
+// 構え（登録・見分け）
+// =====================================================================
+const KAMAE_IDS = ["chudan", "jodan", "gedan", "hasso", "tachi"]; // 登録の順番（中段が先：回避の基準にもする）
+const KAMAE_NAME = { jodan: "上段", chudan: "中段", gedan: "下段", hasso: "八相", tachi: "刀立て" };
+const KF = ["kx", "ky", "gap", "gapY", "kz"];
+const KF_NAME = { kx: "手の横", ky: "手の高さ", gap: "両手の間", gapY: "縦の差", kz: "手の前" };
+// ばらつきの下限（登録が静かすぎると、少しの揺れで別の構えと出てしまうため）
+const KF_FLOOR = { kx: 0.12, ky: 0.12, gap: 0.1, gapY: 0.1, kz: 0.15 };
+let TPL = lsGet(TPL_KEY) || {};
+const selKamae = () => $("sel-kamae").value;
+{
+  const s = lsGet(SEL_KEY); if (s?.kamae) $("sel-kamae").value = s.kamae;
+  $("sel-kamae").onchange = () => { lsSet(SEL_KEY, { kamae: selKamae() }); logEvent("select_kamae", { kamae: selKamae() }); showPrep(); };
+}
+function kamaeDist(f, tp) {
+  let s = 0;
+  for (const k of KF) { const sd = Math.max(tp.sd[k], KF_FLOOR[k]); s += ((f[k] - tp.mean[k]) / sd) ** 2; }
+  return Math.sqrt(s / KF.length);
+}
+function matchKamae(f) {
+  const ds = KAMAE_IDS.filter((id) => TPL[id]).map((id) => ({ id, d: kamaeDist(f, TPL[id]) })).sort((a, b) => a.d - b.d);
+  return { best: ds[0] && ds[0].d <= J.kamaeMaxDist ? ds[0].id : null, ds };
+}
+function meanSd(rows, keys) {
+  const mean = {}, sd = {};
+  for (const k of keys) {
+    const xs = rows.map((r) => r[k]); const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+    mean[k] = +m.toFixed(3); sd[k] = +Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / xs.length).toFixed(3);
+  }
+  return { mean, sd };
+}
+const frameObj = (f) => Object.fromEntries([["t", f[0]], ...FIELDS.map((k, i) => [k, f[i + 1]])]);
+// 生の量の平均（回避の基準・位置の基準に使う）
+function avgRaw(t0, t1) {
+  const xs = recentRaw.filter((x) => x.t >= t0 && x.t <= t1).map((x) => x.r);
+  if (xs.length < 3) return null;
+  const o = {};
+  for (const k of ["smx", "smy", "hmx", "hmy", "T", "sw"]) o[k] = xs.reduce((s, x) => s + x[k], 0) / xs.length;
+  for (const k of ["leg", "dz", "handZ", "leanZ"]) { const v = xs.filter((x) => x[k] != null); o[k] = v.length ? v.reduce((s, x) => s + x[k], 0) / v.length : null; }
+  o.n = xs.length;
+  o.sdX = Math.sqrt(xs.reduce((s, x) => s + (x.smx - o.smx) ** 2, 0) / xs.length) / o.T;
+  return o;
+}
+// 止まって ms だけ記録する（frames と見えなかったコマ）
+async function record(ms) {
+  capture = { frames: [], miss: [] };
+  const t0 = now();
+  await wait(ms);
+  const c = capture; capture = null;
+  return { t0, t1: now(), frames: c.frames, miss: c.miss };
+}
+async function countdown() { for (let i = 0; i < 3; i++) { beep(600, 100); await wait(600); } beep(1200, 200); }
+
+async function registerKamae(ids) {
+  if (!needReady()) return;
+  beginRun();
+  const done = [];
+  try {
+    await say(ids.length > 1 ? "構えの登録をします。全身が映る位置に立ってください" : `${KAMAE_NAME[ids[0]]}を登録します。全身が映る位置に立ってください`);
+    await wait(4000);
+    for (const id of ids) {
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        $("cue").textContent = KAMAE_NAME[id];
+        await say(`${KAMAE_NAME[id]}に構えて、止まってください`);
+        await wait(1500);
+        await countdown();
+        $("cue").textContent = "静止";
+        const rec = await record(J.kamaeRegMs);
+        $("cue").textContent = "";
+        const rows = rec.frames.map(frameObj);
+        const { mean, sd } = rows.length ? meanSd(rows, KF) : { mean: null, sd: null };
+        const entry = { at: iso(), kamae: id, attempt, n: rows.length, miss: rec.miss.length, mean, sd, fps: shown.poseFps, sessionId: session?.id };
+        let bad = null;
+        if (rows.length < 20) bad = "体が見えませんでした";
+        else if (sd.kx > 0.15 || sd.ky > 0.15) bad = "動いていました";
+        let cal = null;
+        if (!bad && id === "chudan") {
+          cal = avgRaw(rec.t0, rec.t1);
+          if (!cal) bad = "体が見えませんでした";
+          else if (cal.sdX > J.reanchorMoveMax) bad = "動いていました";
+        }
+        entry.ok = !bad; entry.reason = bad;
+        LOG.kamaeRegs.push(entry); saveLogSoon();
+        if (bad) { beep(220, 300); await say(`${bad}。もう一度`); continue; }
+        TPL[id] = { mean, sd, n: rows.length, at: entry.at };
+        lsSet(TPL_KEY, TPL);
+        if (cal) { CAL = { ...cal, at: entry.at }; anchor = { ...CAL }; lsSet(CAL_KEY, CAL); }
+        beep(1500, 150);
+        done.push(id);
+        break;
+      }
+    }
+    await say(done.length === ids.length ? "登録しました" : `${ids.filter((x) => !done.includes(x)).map((x) => KAMAE_NAME[x]).join("、")}は登録できませんでした`);
+    logEvent("register_kamae", { ids, done });
+  } catch (e) { if (e !== STOP) throw e; }
+  finally { endRun(); drawTplTable(); showPrep(); }
+}
+$("btn-reg-all").onclick = () => registerKamae(KAMAE_IDS);
+for (const id of KAMAE_IDS) {
+  const b = document.createElement("button"); b.className = "b s"; b.textContent = `${KAMAE_NAME[id]}だけ取り直す`;
+  b.onclick = () => registerKamae([id]); $("reg-one").append(b);
+}
+function drawTplTable() {
+  const ids = KAMAE_IDS.filter((id) => TPL[id]);
+  if (!ids.length) { $("tpl-table").innerHTML = "<tr><td>まだ登録していません</td></tr>"; return; }
+  $("tpl-table").innerHTML = `<tr><th></th>${KF.map((k) => `<th>${KF_NAME[k]}</th>`).join("")}<th>コマ</th></tr>` +
+    ids.map((id) => `<tr><th>${KAMAE_NAME[id]}</th>${KF.map((k) => `<td>${fmt(TPL[id].mean[k])}<span class="mut">±${TPL[id].sd[k].toFixed(2)}</span></td>`).join("")}<td>${TPL[id].n}</td></tr>`).join("");
+}
+function drawLiveTable(mk) {
+  if (!live) return;
+  const rows = `<tr><th>今</th>${KF.map((k) => `<td>${fmt(live[k])}</td>`).join("")}</tr>` +
+    mk.ds.map((d) => `<tr><th>${KAMAE_NAME[d.id]}との離れ</th><td colspan="${KF.length}" style="text-align:left">${d.d.toFixed(2)}${d.id === mk.best ? " ← 一致" : ""}</td></tr>`).join("");
+  $("live-table").innerHTML = `<tr><th></th>${KF.map((k) => `<th>${KF_NAME[k]}</th>`).join("")}</tr>` + rows;
+}
+const fmt = (x) => (x == null ? "-" : (x >= 0 ? "+" : "") + x.toFixed(2));
+drawTplTable();
+
+// ---------- 構えの確かめ ----------
+async function checkKamae() {
+  if (!needReady()) return;
+  const ids = KAMAE_IDS.filter((id) => TPL[id]);
+  if (ids.length < 2) { alert("先に構えを2つ以上登録してください"); return; }
+  const reps = Math.max(1, +$("num-check").value || 2);
+  // 同じ構えが続かないように並べる
+  let order;
+  for (let k = 0; k < 50; k++) { order = shuffle(ids.flatMap((id) => Array(reps).fill(id))); if (order.every((x, i) => i === 0 || x !== order[i - 1])) break; }
+  const runId = (LOG.kamaeChecks.at(-1)?.runId || 0) + 1;
+  beginRun(); showLiveDuringRun = true;
+  try {
+    await say(`構えの確かめ。全部で${order.length}回です。読み上げた構えをとってください`);
+    await wait(3000);
+    for (let i = 0; i < order.length; i++) {
+      const id = order[i];
+      $("cue").textContent = KAMAE_NAME[id];
+      await say(KAMAE_NAME[id]);
+      await wait(2000);
+      const rec = await record(1000);
+      const rows = rec.frames.map(frameObj);
+      const cnt = {};
+      for (const f of rows) { const b = matchKamae(f).best || "none"; cnt[b] = (cnt[b] || 0) + 1; }
+      const pred = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0]?.[0] || "none";
+      const mean = rows.length ? meanSd(rows, KF).mean : null;
+      const dists = mean ? Object.fromEntries(matchKamae(mean).ds.map((d) => [d.id, +d.d.toFixed(2)])) : null;
+      LOG.kamaeChecks.push({ runId, i, at: iso(rec.t0), label: id, pred, counts: cnt, n: rows.length, miss: rec.miss.length, mean, dists, tpl: TPL, maxDist: J.kamaeMaxDist });
+      saveLogSoon();
+      $("cue").textContent = "";
+      if (pred === id) { beep(1300, 80); setTimeout(() => beep(1700, 100), 100); } else beep(220, 300);
+      await wait(800);
+    }
+    await say("確かめを終わります");
+  } catch (e) { if (e !== STOP) throw e; }
+  finally { showLiveDuringRun = false; endRun(); showCheck(); }
+}
+$("btn-check").onclick = checkKamae;
+function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+// 取り違えの表（行＝読み上げた構え、列＝判定）
+function confusion(trials) {
+  const ids = [...new Set(trials.map((t) => t.label))].sort((a, b) => KAMAE_IDS.indexOf(a) - KAMAE_IDS.indexOf(b));
+  const cols = [...ids, ...[...new Set(trials.map((t) => t.pred))].filter((p) => !ids.includes(p))];
+  const m = {}; for (const t of trials) { m[t.label] ||= {}; m[t.label][t.pred] = (m[t.label][t.pred] || 0) + 1; }
+  return { ids, cols, m };
+}
+const nm = (id) => KAMAE_NAME[id] || (id === "none" ? "構えなし" : id);
+function showCheck() {
+  const last = LOG.kamaeChecks.at(-1)?.runId;
+  const ts = LOG.kamaeChecks.filter((t) => t.runId === last);
+  if (!ts.length) { $("check-result").innerHTML = ""; return; }
+  const { ids, cols, m } = confusion(ts);
+  const ok = ts.filter((t) => t.label === t.pred).length;
+  const ht = ts.filter((t) => (t.label === "hasso" && t.pred === "tachi") || (t.label === "tachi" && t.pred === "hasso")).length;
+  const htN = ts.filter((t) => t.label === "hasso" || t.label === "tachi").length;
+  $("check-result").innerHTML = `<div class="stat">正解 <b>${ok}/${ts.length}</b>　八相↔刀立ての取り違え <b>${ht}</b>（対象${htN}回）</div>` +
+    `<div class="scroll"><table><tr><th>読み上げ＼判定</th>${cols.map((c) => `<th>${nm(c)}</th>`).join("")}</tr>` +
+    ids.map((r) => `<tr><th>${nm(r)}</th>${cols.map((c) => { const v = m[r]?.[c] || 0; return `<td class="${v ? (r === c ? "diag" : "bad") : ""}">${v || ""}</td>`; }).join("")}</tr>`).join("") + "</table></div>";
+}
+showCheck();
+
+// =====================================================================
+// 拍のタイミング調整
+// =====================================================================
+let TIMING = lsGet(TIMING_KEY) || { byBeat: {} };
+for (const ms of CFG.beatMsChoices) { const o = document.createElement("option"); o.value = ms; o.textContent = `${(ms / 1000).toFixed(1)}秒`; $("sel-beat").append(o); }
+// 素振りの切り出し（前回のラボと同じ：振り始め1.6m/秒、振り終わり0.6m/秒が80ms、始まりは0.45m/秒までさかのぼる、
+// 幅0.18m以上、1.6秒で打ち切り、折り返し（一番遠い点から0.12m戻る）で区切る）。手首は肩の中点から見た3D位置
+const FLOW = { BACK: 0.12, MIN_AMP: 0.2 };
+function swingsOf(frames) {
+  const SW = J.swing, ix = (k) => FIELDS.indexOf(k) + 1;
+  const is = ix("hr3"), ixx = ix("r3x"), iy = ix("r3y"), iz = ix("r3z");
+  const fs = frames, out = []; let cur = null, low = 0;
+  const Pp = (i) => [fs[i][ixx], fs[i][iy], fs[i][iz]];
+  const d3 = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const piece = (i0, i1) => {
+    let peak = 0, peakT = fs[i0][0], far = 0, farD = [0, 0, 0];
+    for (let k = i0; k <= i1; k++) {
+      if (fs[k][is] > peak) { peak = fs[k][is]; peakT = fs[k][0]; }
+      const d = d3(Pp(k), Pp(i0)); if (d > far) { far = d; farD = Pp(k).map((v, m) => v - Pp(i0)[m]); }
+    }
+    return { onset: fs[i0][0], peakT, end: fs[i1][0], peak: +peak.toFixed(2), amp: +far.toFixed(2), dir: farD.map((x) => +(x / (far || 1)).toFixed(2)) };
+  };
+  const push = (sw) => { if (sw.amp >= SW.minAmp && sw.peak >= SW.start) out.push(sw); };
+  for (let i = 0; i < fs.length; i++) {
+    const t = fs[i][0], s = fs[i][is];
+    if (!cur) {
+      if (s > SW.start) { let j = i; while (j > 0 && fs[j - 1][is] > SW.onset) j--; cur = { i0: j, start: t, far: 0, farI: j }; low = 0; }
+      continue;
+    }
+    const d = d3(Pp(i), Pp(cur.i0));
+    if (d > cur.far) { cur.far = d; cur.farI = i; }
+    if (cur.far >= FLOW.MIN_AMP && cur.far - d > FLOW.BACK && cur.farI > cur.i0) {
+      push(piece(cur.i0, cur.farI));
+      cur = { i0: cur.farI, start: fs[cur.farI][0], far: d3(Pp(i), Pp(cur.farI)), farI: i };
+      continue;
+    }
+    if (s < SW.stop) low = low || t; else low = 0;
+    if ((low && t - low > 80) || t - cur.start > SW.maxMs) { push(piece(cur.i0, i)); cur = null; }
+  }
+  if (cur && cur.i0 < fs.length - 1) push(piece(cur.i0, fs.length - 1));
+  return out;
+}
+const q = (a, p) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };
+const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y), n = s.length; return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2; };
+
+async function runTiming() {
+  if (!needReady()) return;
+  const L = +$("sel-beat").value, N = Math.max(4, +$("num-swings").value || J.timingSwings);
+  beginRun(); showLiveDuringRun = true;
+  try {
+    await say("タイミング調整。ドンの音に合わせて振り下ろし、カッの間に構えに戻ってください");
+    await wait(1500);
+    // 太鼓を AudioContext の時刻で前もって並べる。拍の時刻は performance.now() に直して記録する
+    const a0 = ac.currentTime + 0.4, base = now(), abase = ac.currentTime;
+    const toPerf = (a) => base + (a - abase) * 1000;
+    for (let i = 0; i < 4; i++) drumAt(a0 + (i * L) / 1000, false);
+    const beats = [];
+    for (let k = 0; k < N; k++) { const a = a0 + ((4 + 2 * k) * L) / 1000; drumAt(a, true); drumAt(a + L / 1000, false); beats.push(toPerf(a)); }
+    capture = { frames: [], miss: [] };
+    const tStart = now();
+    // 画面にも拍を出す（ドン＝振る）
+    for (let k = 0; k < N; k++) {
+      await waitUntil(beats[k] - 2);
+      $("cue").textContent = `振る ${k + 1}/${N}`;
+      setTimeout(() => { if ($("cue").textContent.startsWith("振る")) $("cue").textContent = "戻る"; }, L * 0.8);
+    }
+    await waitUntil(beats.at(-1) + 2 * L + 300);
+    const c = capture; capture = null; $("cue").textContent = "";
+    const swings = swingsOf(c.frames);
+    // 拍ごとに、ドン±1拍の間で一番速い振り下ろし（下向きの素振り。無ければ一番速い素振り）を選ぶ
+    const per = beats.map((B, k) => {
+      const cand = swings.filter((s) => s.peakT >= B - L && s.peakT < B + L);
+      const down = cand.filter((s) => s.dir[1] > 0.3);
+      const pick = (down.length ? down : cand).sort((a, b) => b.peak - a.peak)[0];
+      return { k, beatT: Math.round(B), offset: pick ? Math.round(pick.peakT - B) : null, peak: pick?.peak ?? null, down: pick ? pick.dir[1] > 0.3 : null, nCand: cand.length };
+    });
+    const offs = per.map((p) => p.offset).filter((x) => x != null);
+    const med = median(offs);
+    const ok = offs.length >= Math.max(4, Math.ceil(N / 2));
+    const entry = {
+      at: iso(tStart), beatMs: L, n: N, found: offs.length, offsetMs: med == null ? null : Math.round(med),
+      p10: q(offs, 0.1), p90: q(offs, 0.9), per, swings, saved: ok,
+      audio: { outputLatency: ac.outputLatency ?? null, baseLatency: ac.baseLatency ?? null, sampleRate: ac.sampleRate },
+      fps: shown.poseFps, miss: c.miss.length, sessionId: session?.id, frames: c.frames, fields: FIELDS,
+    };
+    LOG.timingRuns.push(entry); saveLogSoon();
+    if (ok) {
+      TIMING.byBeat[L] = { offsetMs: entry.offsetMs, found: offs.length, n: N, p10: entry.p10, p90: entry.p90, at: entry.at };
+      lsSet(TIMING_KEY, TIMING);
+      beep(1500, 150);
+      await say(`調整しました。${entry.offsetMs >= 0 ? "プラス" : "マイナス"}${Math.abs(entry.offsetMs)}ミリ秒`);
+    } else {
+      beep(220, 300);
+      await say(`振りを${offs.length}回しか拾えませんでした。調整値は変えていません`);
+    }
+  } catch (e) { if (e !== STOP) throw e; }
+  finally { showLiveDuringRun = false; endRun(); showTiming(); showPrep(); }
+}
+$("btn-timing").onclick = runTiming;
+function showTiming() {
+  $("timing-state").innerHTML = CFG.beatMsChoices.map((ms) => {
+    const v = TIMING.byBeat[ms];
+    return `${(ms / 1000).toFixed(1)}秒：${v ? `<b>${v.offsetMs >= 0 ? "+" : ""}${v.offsetMs}ms</b>（拾えた${v.found}/${v.n}、10%点${v.p10}〜90%点${v.p90}）` : "未調整"}`;
+  }).join("<br>");
+  const r = LOG.timingRuns.at(-1);
+  if (!r) { $("timing-result").innerHTML = ""; return; }
+  $("timing-result").innerHTML = `<div class="mut">最新（${new Date(r.at).toLocaleTimeString()}、1拍${r.beatMs}ms）：拍ごとのずれ（+＝ドンより遅い）</div><div class="scroll"><table><tr><th>回</th>${r.per.map((p) => `<th>${p.k + 1}</th>`).join("")}</tr>` +
+    `<tr><th>ずれms</th>${r.per.map((p) => `<td>${p.offset ?? "×"}</td>`).join("")}</tr>` +
+    `<tr><th>速さの山</th>${r.per.map((p) => `<td>${p.peak ?? ""}</td>`).join("")}</tr>` +
+    `<tr><th>下向き</th>${r.per.map((p) => `<td>${p.down == null ? "" : p.down ? "○" : "×"}</td>`).join("")}</tr></table></div>`;
+}
+showTiming();
+
+// =====================================================================
+// 構え直し（毎ターンの入力の前に1秒。回避の指標の基準をその場の姿勢で取り直す）
+// =====================================================================
+// 段階3以降も、この reanchor() をそのまま使う
+async function reanchor(ms = J.reanchorMs) {
+  const rec = await record(ms);
+  const an = avgRaw(rec.t0, rec.t1);
+  const rows = rec.frames.map(frameObj);
+  const sel = selKamae();
+  const inKamae = rows.length ? rows.filter((f) => matchKamae(f).best === sel).length / rows.length : 0;
+  const res = { t0: Math.round(rec.t0), ok: !!an, moving: an ? an.sdX > J.reanchorMoveMax : null, sdX: an ? +an.sdX.toFixed(3) : null, kamae: sel, inKamae: +inKamae.toFixed(2), n: rows.length, miss: rec.miss.length };
+  if (an) { anchor = { ...an }; live = null; }
+  return res;
+}
+// 仮の回避の表示（前回のラボの閾値。かがみ左右は未定なので「上体・左／右」と出す）
+let liveDefenseOn = false;
+function provisionalDefense(m, mk) {
+  const th = J.th;
+  if (m.drop > th.crouch) return { id: "crouch", name: "しゃがみ", color: "#ff8f6b" };
+  if (m.hipShift > th.step) return { id: "stepL", name: "ステップ左", color: "#5fd18a" };
+  if (m.hipShift < -th.step) return { id: "stepR", name: "ステップ右", color: "#5fd18a" };
+  if (m.leanX > th.leanX) return { id: "leanL", name: "上体・左（仮）", color: "#ff6bd5" };
+  if (m.leanX < -th.leanX) return { id: "leanR", name: "上体・右（仮）", color: "#ff6bd5" };
+  if (m.back > th.back) return { id: "back", name: "下がり", color: "#c58bff" };
+  if (mk.best === "tachi") return { id: "tachi", name: "刀立て", color: "#7cc7ff" };
+  if (mk.best === selKamae()) return { id: "kamae", name: `構え（${KAMAE_NAME[mk.best]}）`, color: "#ddd" };
+  return { id: "none", name: "判定なし", color: "#999" };
+}
+async function anchorTest() {
+  if (!needReady({ kamae: true })) return;
+  if (!CAL) { alert("先に中段を登録してください（回避の基準に使います）"); return; }
+  const n = Math.max(1, +$("num-anchor").value || 4);
+  const runId = (LOG.anchorTests.at(-1)?.runId || 0) + 1;
+  beginRun(); showLiveDuringRun = true;
+  try {
+    await say(`構え直しのテスト。${KAMAE_NAME[selKamae()]}で始めます`);
+    await wait(2500);
+    for (let i = 0; i < n; i++) {
+      liveDefenseOn = false;
+      $("cue").textContent = "構え直し";
+      await say("構え直し");
+      beep(900, 100);
+      const res = await reanchor();
+      beep(1500, 120);
+      $("cue").textContent = res.moving ? "動いていた" : res.inKamae < 0.5 ? "構えが違う" : "";
+      // そのあと5秒は自由に動く。直後0.5秒の指標（0に近いはず）と、5秒の間に出た仮の回避を記録
+      liveDefenseOn = true;
+      const after = await record(5000);
+      const rows = after.frames.map(frameObj);
+      const first = rows.filter((f) => f.t - after.t0 < 500);
+      const maxAbs = (k, xs) => (xs.length ? +Math.max(...xs.map((f) => Math.abs(f[k]))).toFixed(3) : null);
+      const seen = {}; for (const f of rows) { const d = provisionalDefense(f, matchKamae(f)).id; seen[d] = (seen[d] || 0) + 1; }
+      LOG.anchorTests.push({ runId, i, at: iso(res.t0), ...res, anchor, first500: { hipShift: maxAbs("hipShift", first), drop: maxAbs("drop", first), back: maxAbs("back", first), leanX: maxAbs("leanX", first) }, seen });
+      saveLogSoon();
+      $("cue").textContent = "";
+    }
+    liveDefenseOn = false;
+    await say("テストを終わります");
+  } catch (e) { if (e !== STOP) throw e; }
+  finally { liveDefenseOn = false; showLiveDuringRun = false; anchor = CAL ? { ...CAL } : null; live = null; endRun(); showAnchor(); }
+}
+$("btn-anchor").onclick = anchorTest;
+const DEF_NAME = { crouch: "しゃがみ", stepL: "ステップ左", stepR: "ステップ右", leanL: "上体・左", leanR: "上体・右", back: "下がり", tachi: "刀立て", kamae: "構え", none: "判定なし" };
+function showAnchor() {
+  const last = LOG.anchorTests.at(-1)?.runId;
+  const ts = LOG.anchorTests.filter((t) => t.runId === last);
+  if (!ts.length) { $("anchor-result").innerHTML = ""; return; }
+  $("anchor-result").innerHTML = `<div class="scroll"><table><tr><th>回</th><th>動いていた</th><th>構えの一致</th><th>直後0.5秒 腰の横ずれ</th><th>沈み</th><th>下がり</th><th>5秒の間に出たもの（コマ数）</th></tr>` +
+    ts.map((t) => `<tr><td>${t.i + 1}</td><td>${t.moving ? "はい" : "いいえ"}</td><td>${Math.round(t.inKamae * 100)}%</td><td>${t.first500.hipShift ?? "-"}</td><td>${t.first500.drop ?? "-"}</td><td>${t.first500.back ?? "-"}</td>` +
+      `<td style="text-align:left">${Object.entries(t.seen).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${DEF_NAME[k] || k}${v}`).join(" ")}</td></tr>`).join("") + "</table></div>";
+}
+showAnchor();
+
+// =====================================================================
+// 準備の状態・記録
+// =====================================================================
+function showPrep() {
+  const reg = KAMAE_IDS.filter((id) => TPL[id]).map((id) => KAMAE_NAME[id]);
+  $("prep-state").innerHTML = [
+    `カメラ：<b>${running ? "動いている" : "止まっている"}</b>`,
+    `構えの登録：<b>${reg.length ? reg.join("・") : "まだ"}</b>　試合で使う構え：<b>${KAMAE_NAME[selKamae()]}</b>`,
+    `拍の調整：${CFG.beatMsChoices.map((ms) => `${(ms / 1000).toFixed(1)}秒 <b>${TIMING.byBeat[ms] ? (TIMING.byBeat[ms].offsetMs >= 0 ? "+" : "") + TIMING.byBeat[ms].offsetMs + "ms" : "未"}</b>`).join("　")}`,
+  ].join("<br>");
+}
+showPrep();
+function summary() {
+  const L = [];
+  const fpsAll = LOG.perf.filter((p) => p.body).map((p) => p.poseFps);
+  L.push(`# 拍の決闘ラボ 段階1 要約（版 ${VERSION}、${new Date().toLocaleString()}）`);
+  L.push(`端末: ${navigator.userAgent.match(/\(([^)]+)\)/)?.[1] || navigator.userAgent}　骨格FPS 中央${median(fpsAll) ?? "-"}（10%点${q(fpsAll, 0.1) ?? "-"}）`);
+  L.push("");
+  L.push("## 構えの登録（平均±ばらつき。手の横+＝自分の右、手の高さ+＝肩より下、胴の長さ比）");
+  for (const id of KAMAE_IDS) {
+    const t = TPL[id]; if (!t) continue;
+    L.push(`${KAMAE_NAME[id]}: ${KF.map((k) => `${KF_NAME[k]}${fmt(t.mean[k])}±${t.sd[k].toFixed(2)}`).join(" ")}（${t.n}コマ）`);
+  }
+  const regFail = LOG.kamaeRegs.filter((r) => !r.ok);
+  L.push(`登録のやり直し: ${regFail.length}回${regFail.length ? `（${regFail.map((r) => `${KAMAE_NAME[r.kamae]}:${r.reason}`).join("、")}）` : ""}`);
+  L.push(`試合で使う構え: ${KAMAE_NAME[selKamae()]}　見分けの甘さ kamaeMaxDist=${J.kamaeMaxDist}`);
+  L.push("");
+  const runs = [...new Set(LOG.kamaeChecks.map((t) => t.runId))];
+  L.push(`## 構えの確かめ（${runs.length}回分）`);
+  const pr = (ts, title) => {
+    if (!ts.length) return;
+    const { ids, cols, m } = confusion(ts);
+    const ok = ts.filter((t) => t.label === t.pred).length;
+    const ht = ts.filter((t) => (t.label === "hasso" && t.pred === "tachi") || (t.label === "tachi" && t.pred === "hasso")).length;
+    L.push(`${title}: 正解 ${ok}/${ts.length}　八相↔刀立ての取り違え ${ht}（対象${ts.filter((t) => t.label === "hasso" || t.label === "tachi").length}回）`);
+    L.push(`  読み上げ＼判定 | ${cols.map(nm).join(" | ")}`);
+    for (const r of ids) L.push(`  ${nm(r)} | ${cols.map((c) => m[r]?.[c] || 0).join(" | ")}`);
+    const wrong = ts.filter((t) => t.label !== t.pred);
+    for (const t of wrong) L.push(`  × ${nm(t.label)}→${nm(t.pred)}: ${t.mean ? KF.map((k) => `${KF_NAME[k]}${fmt(t.mean[k])}`).join(" ") : "-"}　離れ ${t.dists ? Object.entries(t.dists).map(([k, v]) => `${nm(k)}${v}`).join(" ") : "-"}`);
+  };
+  if (runs.length) { pr(LOG.kamaeChecks.filter((t) => t.runId === runs.at(-1)), "最新"); if (runs.length > 1) pr(LOG.kamaeChecks, "全部"); }
+  L.push("");
+  L.push("## 拍のタイミング調整（+＝ドンより遅い。素振りの速さの山の時刻）");
+  for (const r of LOG.timingRuns.slice(-6)) {
+    L.push(`${new Date(r.at).toLocaleTimeString()} 1拍${r.beatMs}ms: 中央${r.offsetMs ?? "-"}ms（10%点${r.p10 ?? "-"} / 90%点${r.p90 ?? "-"}） 拾えた${r.found}/${r.n} ${r.saved ? "保存" : "保存せず"}　ずれ[${r.per.map((p) => p.offset ?? "×").join(",")}]　出力の遅れ ${r.audio.outputLatency != null ? Math.round(r.audio.outputLatency * 1000) + "ms" : "不明"}`);
+  }
+  L.push(`今の調整値: ${CFG.beatMsChoices.map((ms) => `${ms}ms→${TIMING.byBeat[ms]?.offsetMs ?? "未"}`).join("　")}`);
+  L.push("");
+  const aruns = [...new Set(LOG.anchorTests.map((t) => t.runId))];
+  L.push(`## 構え直し（最新の${aruns.length ? 1 : 0}回分）`);
+  for (const t of LOG.anchorTests.filter((x) => x.runId === aruns.at(-1))) {
+    L.push(`${t.i + 1}: 動いていた${t.moving ? "はい" : "いいえ"}(${t.sdX}) 構えの一致${Math.round(t.inKamae * 100)}% 直後0.5秒 腰${t.first500.hipShift} 沈み${t.first500.drop} 下がり${t.first500.back} 上体${t.first500.leanX}　5秒で出たもの ${Object.entries(t.seen).map(([k, v]) => `${DEF_NAME[k] || k}${v}`).join(" ")}`);
+  }
+  return L.join("\n");
+}
+function refreshSummary() { $("summary").value = summary(); }
+$("btn-refresh").onclick = refreshSummary;
+$("btn-copy").onclick = async () => {
+  refreshSummary();
+  const t = $("summary").value;
+  try { await navigator.clipboard.writeText(t); alert("コピーしました"); }
+  catch { $("summary").select(); document.execCommand("copy"); alert("コピーしました（うまくいかなければ、枠の中を長押しして全部選択→コピー）"); }
+};
+$("btn-dl-json").onclick = () => {
+  const blob = new Blob([JSON.stringify(LOG)], { type: "application/json" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+  a.download = `duellab-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.json`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+};
+$("btn-clear").onclick = () => {
+  if (!confirm("記録を全部消します（登録した構えと調整値は残ります）。先にJSONを保存しましたか？")) return;
+  LOG = newLog(); saveLogNow(); refreshSummary(); showCheck(); showTiming(); showAnchor();
+};
+
+// ---------- タブ ----------
+document.querySelectorAll("nav button[data-tab]").forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll("nav button[data-tab]").forEach((x) => x.classList.toggle("on", x === b));
+    for (const id of ["prep", "kamae", "timing", "anchor", "log"]) $("p-" + id).hidden = id !== b.dataset.tab;
+    if (b.dataset.tab === "log") refreshSummary();
+  };
+});
+document.addEventListener("visibilitychange", () => { if (document.hidden) saveLogNow(); });
+</script>
+</body>
+</html>

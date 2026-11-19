@@ -236,7 +236,7 @@
 // 拍の決闘ラボ（使い捨ての実験）。本編（suburi-bugeicho）のファイルは読み込まない。
 // 骨格推定・指標・素振りの検出は、同じフォルダの回避判定ラボ（index.html v4）から写したもの。
 const $ = (id) => document.getElementById(id);
-const VERSION = "duel-4a 2026-11-19";
+const VERSION = "duel-4b 2026-11-19";
 const VISION = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
@@ -908,7 +908,10 @@ function pickBeats(beats, swings, L) {
   return beats.map((B, k) => {
     const cand = swings.filter((s) => s.peakT >= B + w0 * L && s.peakT < B + w1 * L);
     const down = cand.filter((s) => s.dir[1] > 0.3);
-    const pick = [...(down.length ? down : cand)].sort((a, b) => b.peak - a.peak)[0];
+    // duel-4b：振り下ろしを優先するのは、一番速い振りの7割以上の速さがあるときだけ（1.0秒の調整で、横に振った回に弱い振り下ろし＝戻りを拾い +624ms になった）
+    const fastest = [...cand].sort((a, b) => b.peak - a.peak)[0];
+    const bestDown = [...down].sort((a, b) => b.peak - a.peak)[0];
+    const pick = bestDown && bestDown.peak >= (fastest?.peak ?? 0) * 0.7 ? bestDown : fastest;
     return { k, beatT: Math.round(B), offset: pick ? Math.round(pick.peakT - B) : null, peak: pick?.peak ?? null, down: pick ? pick.dir[1] > 0.3 : null, nCand: cand.length };
   });
 }
@@ -1052,8 +1055,8 @@ function labelSwings(swings, frames, L = 1000) {
   for (const x of s) if (!x.role && x.dir[2] < -A_.thrustZ && -x.dir[2] >= Math.abs(x.dir[0]) && -x.dir[2] >= Math.abs(x.dir[1])) x.role = "pull";
   // duel-3j：振り下ろしたあと少し止まってから構えへ戻す動き（間が200ms以上空く）も戻りとみなす：
   //  攻撃の終わりから returnGapMs 以内に始まる、反対向きで、速さが攻撃の returnPeakFrac 未満の振り
-  const RG = J.returnSwing || { gapMs: 700, peakFrac: 0.6 };
-  for (let i = 0; i < s.length; i++) {
+  const RG = J.returnSwing || { gapMs: 0, peakFrac: 0.6 };
+  for (let i = 0; RG.gapMs > 0 && i < s.length; i++) {
     const A = s[i]; if (A.role) continue;
     const B = s.slice(i + 1).find((x) => !x.role);
     if (B && B.onset - A.end < RG.gapMs && dot3(A.dir, B.dir) < -0.3 && B.peak < A.peak * RG.peakFrac) B.role = "return";
@@ -1220,6 +1223,18 @@ function judgeBeat({ frames, labeled, ws, we, anc, used, refT = null }) {
     return { ...out, act: a.id, rule: "2 素振り" };
   }
   if (st?.ok) return { ...out, act: "kamae", rule: "4b 拍の後半で構えに戻っていた" };
+  // 2b. duel-4b：攻撃が見つからない拍でも、「構えに戻る動き」とみなした振りが強ければ（fallbackAttack.peak 以上）攻撃にする。
+  //     拍の後半で構えに戻って止まっていれば（4b）こちらは使わない。振ったのに構えと判定されて負けるのが、いちばんプレイヤーを嫌にさせるため
+  const FB = J.fallbackAttack || { peak: 3.5 };
+  if (!st?.ok && FB.peak > 0) {
+    const cand = labeled.filter((x) => x.role === "return" && !used.has(x.onset) && x.peakT >= ws && x.peakT < we && x.peak >= FB.peak).sort((a, b) => b.peak - a.peak)[0];
+    if (cand) {
+      used.add(cand.onset);
+      const a = classifyAttack(cand, frames);
+      out.swing = { peak: cand.peak, amp: cand.amp, dir: cand.dir, onset: cand.onset, peakT: cand.peakT, end: cand.end, offsetInWin: Math.round(cand.peakT - (ws + we) / 2), ...a, n: 1 };
+      return { ...out, act: a.id, rule: "2b 強い振り（戻りと見た振りを攻撃に）" };
+    }
+  }
   // 3. 防御が150ms以上 → 続いた時間が一番長いもの
   // 刀立ては構えと形が近い（両手の縦の差だけが違う人もいる）ので、構えの方が長く続いた拍では刀立てにしない（実機 duel-2c で構え→刀立て 1回）
   // 体が動いた拍は、刀立てより体の動きを答えにする（ステップや下がりの間、手が刀立ての形に見えることがある：実機 duel-3b）
@@ -1852,6 +1867,7 @@ async function runDuel() {
   const npcId = $("sel-npc").value, npc = NPCS[npcId];
   const L = +$("sel-beat3").value, off = beatOffset(L);
   const league = $("sel-league").value;
+  lsSet("duellab.league.v1", league);
   const P = { name: "自分", hp: R.hpStart, sp: R.spStart, bonus: 0, kamae: selKamae(), league };
   const N = { name: npc.name, hp: R.hpStart, sp: R.spStart, bonus: 0, kamae: npc.kamae, league };
   const mode = ruleMode();
@@ -1861,7 +1877,7 @@ async function runDuel() {
   const npcDone = [], pHist = [];
   beginRun(); hudShow(true); hudUpdate(P, N, npc, npcDone);
   try {
-    await say(mode === "simple" ? `${npc.name}との決闘。シンプルなルール${league === "beginner" ? "、ビギナー" : ""}です` : `${npc.name}との決闘。相手は${KAMAE_NAME[npc.kamae]}、あなたは${KAMAE_NAME[P.kamae]}`);
+    await say(mode === "simple" ? `${npc.name}との決闘。シンプルなルール、${league === "beginner" ? "ビギナーリーグ" : "通常リーグ"}です` : `${npc.name}との決闘。相手は${KAMAE_NAME[npc.kamae]}、あなたは${KAMAE_NAME[P.kamae]}`);
     for (let turn = 1; turn <= R.maxTurns; turn++) {
       const plan = npcPlan(N, npc, pHist);
       $("big").textContent = ""; $("sub").textContent = "";
@@ -1910,6 +1926,7 @@ async function runDuel() {
   finally { match.durationMs ??= Math.round(now() - match.t0); document.body.classList.remove("arena"); hudShow(false); saveLogNow(); endRun(); showDuelResult(); }
 }
 $("btn-duel").onclick = runDuel;
+{ const lg = lsGet("duellab.league.v1"); if (lg) $("sel-league").value = lg; }
 // 1ターンの入力（4拍）の運動量：肩から見た手首の3Dの道のり（m）、腰の横の道のり（胴の長さ比）、振りの本数
 function moveOf(t) {
   const ix = (k) => FIELDS.indexOf(k) + 1, w0 = t.res[0]?.ws ?? 0, w1 = t.res.at(-1)?.we ?? 0;
@@ -2030,7 +2047,7 @@ function summaryStage3(L) {
     L.push(`## 段階3 決闘（最新${ms.length}試合）`);
     for (const m of ms) {
       const s = matchStats(m);
-      L.push(`### ${new Date(m.at).toLocaleTimeString()} ${m.mode === "simple" ? "［シンプル］" : "［通常］"} ${m.npcName}（${KAMAE_NAME[m.npcKamae]}） 1拍${m.beatMs}ms 窓の中心${fmtOff(m.offset)} 自分${KAMAE_NAME[m.kamae]}: ${m.end ? `${m.end.result}（自分HP${m.end.pHp}・相手HP${m.end.nHp}、${m.turns.length}ターン、${m.end.by}）` : `途中で止めた（${m.turns.length}ターン）`}`);
+      L.push(`### ${new Date(m.at).toLocaleTimeString()} ${m.mode === "simple" ? "［シンプル］" : "［通常］"}${m.league === "beginner" ? "［ビギナー］" : "［通常リーグ］"} ${m.npcName}（${KAMAE_NAME[m.npcKamae]}） 1拍${m.beatMs}ms 窓の中心${fmtOff(m.offset)} 自分${KAMAE_NAME[m.kamae]}: ${m.end ? `${m.end.result}（自分HP${m.end.pHp}・相手HP${m.end.nHp}、${m.turns.length}ターン、${m.end.by}）` : `途中で止めた（${m.turns.length}ターン）`}`);
       if (m.error) L.push(`  失敗: ${m.error.split(String.fromCharCode(10))[0]}`);
       L.push(`  与えた${s.given}／受けた${s.taken}　自分の防御 優${s.g["優"]} 良${s.g["良"]} 可${s.g["可"]} 不${s.g["不"]}　相打ち${s.clash}　棒立ち${s.open}　判定できない${s.unsure}　拍の途中の表示と最後の判定が違った${s.liveDiff}`);
       for (const t of m.turns) {

@@ -232,7 +232,7 @@
 // 拍の決闘ラボ（使い捨ての実験）。本編（suburi-bugeicho）のファイルは読み込まない。
 // 骨格推定・指標・素振りの検出は、同じフォルダの回避判定ラボ（index.html v4）から写したもの。
 const $ = (id) => document.getElementById(id);
-const VERSION = "duel-3f 2026-11-19";
+const VERSION = "duel-3g 2026-11-19";
 const VISION = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
@@ -1086,6 +1086,24 @@ function defenseDurations(frames, ws, we, anc) {
   for (const k of Object.keys(dur)) dur[k] = Math.round(dur[k]);
   return { dur, cont, peak };
 }
+// 拍の後半で、構えに戻って止まっているか（ヒデキの提案、duel-3f の実機を受けて）。
+// 技のあとに構えへ戻る動き（姿勢と刀を動かす）を、次の拍の攻撃や回避と間違えることがあったため。
+// 後半（窓の終わりの settle.frac）で：手が登録した構えの形（kamaeRate 以上のコマ）、手がほぼ止まっている（肩から見た手の速さ handMax 未満）、
+// 体がターンの初めの位置・姿勢に戻っている（腰の横ずれ・沈み・下がり・上体の倒れが小さい）なら「構えに戻った」とする
+function settledKamae(frames, ws, we, anc) {
+  const S = J.settle || { frac: 0.35, atkFrom: 0.35, kamaeRate: 0.8, handMax: 1.2, hip: 0.15, drop: 0.15, back: 0.05, lean: 0.12 };
+  const t0 = we - (we - ws) * S.frac;
+  const fs = frames.filter((f) => f[0] >= t0 && f[0] < we).map(frameObj);
+  if (fs.length < 4) return null;
+  const sel = selKamae();
+  const kam = fs.filter((f) => matchKamae(f).best === sel).length / fs.length;
+  const hand = Math.max(...fs.map((f) => f.hr3));
+  const ms = fs.map((f) => metrics(rawOf(f), CAL, anc));
+  const mx = (k) => Math.max(...ms.map((m) => Math.abs(m[k])));
+  const back = Math.max(...ms.map((m) => m.back));
+  const ok = kam >= S.kamaeRate && hand < S.handMax && mx("hipShift") < S.hip && mx("drop") < S.drop && back < S.back && mx("leanX") < S.lean;
+  return { ok, kam: +kam.toFixed(2), hand: +hand.toFixed(2), hip: +mx("hipShift").toFixed(3), drop: +mx("drop").toFixed(3), back: +back.toFixed(3), lean: +mx("leanX").toFixed(3) };
+}
 // 1拍の判定（4-2の順番）。used は、前の拍で使った素振り（同じ振りを2つの拍に数えない）
 function judgeBeat({ frames, labeled, ws, we, anc, used }) {
   const th = J.th, out = { ws: Math.round(ws), we: Math.round(we) };
@@ -1095,12 +1113,16 @@ function judgeBeat({ frames, labeled, ws, we, anc, used }) {
   out.defDur = D.dur; out.peak = D.peak;
   // 1. 体が画面から外れている
   if (out.missFrac >= J.offscreenFrac) return { ...out, act: "open", rule: "1 画面外" };
+  // 拍の後半で構えに戻って止まっていれば、窓の前のほう（atkFrom より前）の振りと、防御は数えない（前の技から構えに戻る動きだったとみなす）
+  const SET = J.settle || { atkFrom: 0.35 };
+  const st = settledKamae(frames, ws, we, anc); out.settle = st;
   // 体の動きの防御（ステップ・下がり・しゃがみ・かがみ）で一番長く続いたもの
   // 足・腰の動きがあればそれを先に（下がりながら上体が傾くと、かがみの方が長く出ることがある：実機 duel-3c 下がり→かがみ右）
   const longest = (ids) => ids.filter((k) => D.dur[k] >= th.holdMs).sort((a, b) => D.dur[b] - D.dur[a])[0];
   const foot = longest(FOOT_DEF), body = foot || longest(BODY_DEF);
   // 2. 素振り → 攻撃
-  const atks = labeled.filter((s) => s.role === "attack" && !used.has(s.onset) && s.peakT >= ws && s.peakT < we);
+  const atkStart = st?.ok ? ws + (we - ws) * SET.atkFrom : ws;
+  const atks = labeled.filter((s) => s.role === "attack" && !used.has(s.onset) && s.peakT >= atkStart && s.peakT < we);
   if (atks.length) {
     const sw = atks.sort((a, b) => b.peak - a.peak)[0];
     used.add(sw.onset);
@@ -1122,6 +1144,7 @@ function judgeBeat({ frames, labeled, ws, we, anc, used }) {
     }
     return { ...out, act: a.id, rule: "2 素振り" };
   }
+  if (st?.ok) return { ...out, act: "kamae", rule: "4b 拍の後半で構えに戻っていた" };
   // 3. 防御が150ms以上 → 続いた時間が一番長いもの
   // 刀立ては構えと形が近い（両手の縦の差だけが違う人もいる）ので、構えの方が長く続いた拍では刀立てにしない（実機 duel-2c で構え→刀立て 1回）
   // 体が動いた拍は、刀立てより体の動きを答えにする（ステップや下がりの間、手が刀立ての形に見えることがある：実機 duel-3b）

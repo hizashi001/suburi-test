@@ -236,7 +236,7 @@
 // 拍の決闘ラボ（使い捨ての実験）。本編（suburi-bugeicho）のファイルは読み込まない。
 // 骨格推定・指標・素振りの検出は、同じフォルダの回避判定ラボ（index.html v4）から写したもの。
 const $ = (id) => document.getElementById(id);
-const VERSION = "duel-4d 2026-11-19";
+const VERSION = "duel-4e 2026-11-19";
 const VISION = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
@@ -1287,7 +1287,9 @@ function simpleOverride(r, labeled, frames, ws, we, used) {
     const a = classifyAttack(strong, frames);
     return { ...r, act: a.id, rule: "2s 強い振り（シンプル）", fineAct: r.act, swing: { peak: strong.peak, amp: strong.amp, dir: strong.dir, onset: strong.onset, peakT: strong.peakT, end: strong.end, offsetInWin: Math.round(strong.peakT - (ws + we) / 2), ...a, n: 1 } };
   }
-  if (!strong && ATK_NAME[r.act] && (r.swing?.peak ?? 0) < SJ.atkPeak) {
+  // duel-4e：弱い攻撃を防御・構えに落とす方は、型の記録で胴・突き（肩から見ると遅い）を消して 46/52 → 36/52 に悪くなったので、既定は使わない（downgrade:false）。
+  //          強い振りを攻撃に上げる方だけ使う（型の記録では誤りを増やさず、決闘の「振ったのにかがみ」を直す）
+  if (SJ.downgrade && !strong && ATK_NAME[r.act] && (r.swing?.peak ?? 0) < SJ.atkPeak) {
     const th = J.th, D = r.defDur || {};
     const best = DEF_IDS.filter((k) => D[k] >= th.holdMs).sort((a, b) => D[b] - D[a])[0];
     return { ...r, act: best || "kamae", rule: `3s 振りが弱い（シンプル、${best ? "防御" : "構え"}）`, fineAct: r.act };

@@ -109,13 +109,14 @@ export default {
   // mix は 攻撃・防御・構え の選びやすさ。likes に書いた行動は、書いていない行動の likeWeight 倍選ばれやすい
   npc: {
     likeWeight: 3,
+    mirrorGain: 2,   // 写し身：プレイヤーの傾向（割合）×この値だけ、それに強い行動を選びやすくする
     lowSp: 40, lowSpKamaeMul: 3,     // SPが40未満なら構えを3倍
     lowHp: 35, lowHpDefenseMul: 1.5, // HPが35未満なら防御を1.5倍
     list: {
       tesshin: { name: "鉄心", kamae: "chudan", mix: { attack: 55, defense: 30, kamae: 15 }, likes: ["tsukiR", "tsukiL", "doR", "doL", "back", "tachi"] },
       hidaka:  { name: "火鷹", kamae: "jodan", mix: { attack: 65, defense: 25, kamae: 10 }, likes: ["makko", "kesaR", "kesaL", "stepL", "stepR"] },
       seisai:  { name: "静斎", kamae: "hasso", mix: { attack: 35, defense: 40, kamae: 25 }, likes: ["kiriageR", "kiriageL", "gyakufu", "crouch", "stepL", "stepR"] },
-      // 写し身：基本の割合は指示書に無いので仮の値（段階4で確認する）
+      // 写し身：基本の割合は指示書に無いので仮の値（50・35・15）。この試合のあなたの行動を数え、それに強い行動を選びやすくする（mirrorGain）
       // 突きの右寄り／左寄り＝突く前に手を引いた位置が、プレイヤーの体のどちら側か（段階2で判定する）
       utsushimi: { name: "写し身", kamae: "chudan", mix: { attack: 50, defense: 35, kamae: 15 }, likes: [], mirror: true },
     },

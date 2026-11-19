@@ -233,7 +233,7 @@
 // 拍の決闘ラボ（使い捨ての実験）。本編（suburi-bugeicho）のファイルは読み込まない。
 // 骨格推定・指標・素振りの検出は、同じフォルダの回避判定ラボ（index.html v4）から写したもの。
 const $ = (id) => document.getElementById(id);
-const VERSION = "duel-3i 2026-11-19";
+const VERSION = "duel-3j2 2026-11-19";
 const VISION = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
@@ -529,6 +529,7 @@ function metrics(r, cal, anc) {
     drop: (r.smy - anc.smy) / cal.T,
     back: backLeg == null ? backT : (backT + backLeg) / 2,
     hipShift: (r.hmx - anc.hmx) / cal.T,
+    hipDrop: (r.hmy - anc.hmy) / cal.T, // 腰の中点の沈み（しゃがむと腰も下がる。前に傾くだけなら腰はほぼ下がらない）
     leanX: ((r.smx - r.hmx) - (anc.smx - anc.hmx)) / cal.T,
     leanZ: r.leanZ == null || anc.leanZ == null ? 0 : r.leanZ - anc.leanZ,
   };
@@ -1039,6 +1040,14 @@ function labelSwings(swings, frames, L = 1000) {
   }
   // 後ろへ引くだけの振り（前後の成分が後ろ向きで一番大きい）は、どの攻撃でもない（実機 duel-3c：しゃがみから起きるときの引き→斬り上げ）
   for (const x of s) if (!x.role && x.dir[2] < -A_.thrustZ && -x.dir[2] >= Math.abs(x.dir[0]) && -x.dir[2] >= Math.abs(x.dir[1])) x.role = "pull";
+  // duel-3j：振り下ろしたあと少し止まってから構えへ戻す動き（間が200ms以上空く）も戻りとみなす：
+  //  攻撃の終わりから returnGapMs 以内に始まる、反対向きで、速さが攻撃の returnPeakFrac 未満の振り
+  const RG = J.returnSwing || { gapMs: 700, peakFrac: 0.6 };
+  for (let i = 0; i < s.length; i++) {
+    const A = s[i]; if (A.role) continue;
+    const B = s.slice(i + 1).find((x) => !x.role);
+    if (B && B.onset - A.end < RG.gapMs && dot3(A.dir, B.dir) < -0.3 && B.peak < A.peak * RG.peakFrac) B.role = "return";
+  }
   for (const x of s) x.role ||= "attack";
   return s;
 }
@@ -1058,26 +1067,28 @@ function defenseDurations(frames, ws, we, anc) {
   const M = (f) => metrics(rawOf(f), CAL, anc);
   const startFs = pre.length ? pre : win.slice(0, 2);
   const avg = (k) => (startFs.length ? startFs.reduce((s, f) => s + M(f)[k], 0) / startFs.length : 0);
-  const st = { hip: avg("hipShift"), back: avg("back") };
+  const st = { hip: avg("hipShift"), back: avg("back"), lean: avg("leanX") };
   // duel-3i：ステップは、ターンの初めの位置から外へ踏み出したときだけ（中央へ戻る動きはステップにしない。戻ったあと構えれば構え）
   const outward = (m) => Math.abs(m.hipShift) - Math.abs(st.hip) > th.step * 0.5;
   const cond = (f) => {
     const m = M(f), mk = matchKamae(f).best, dHip = m.hipShift - st.hip;
     return {
-      crouch: m.drop > th.crouch,
+      // duel-3j：思い切り振り下ろして上体が前に傾くと肩が沈む（0.5〜0.85）。しゃがみは腰も下がったときだけ（実機：真向→しゃがみが多発）
+      crouch: m.drop > th.crouch && m.hipDrop > (th.crouchHip ?? 0.15),
       stepL: dHip > th.step && outward(m), stepR: dHip < -th.step && outward(m),
       // しゃがむと胴と脚の見かけも縮むので、沈んでいる間は下がり・かがみに数えない（前回のラボの「しゃがみが先」と同じ）
       // 横へ足を運ぶと見かけの大きさも少し変わるので、腰がステップの分だけ動いている間は下がりに数えない（実機 duel-3b：ステップ右→下がり）
       back: m.back - st.back > th.back && m.drop <= th.crouch * 0.6 && Math.abs(dHip) <= th.step,
-      kagamiL: m.leanX > th.leanX && Math.abs(dHip) <= th.step && m.drop <= th.crouch * 0.6,
-      kagamiR: m.leanX < -th.leanX && Math.abs(dHip) <= th.step && m.drop <= th.crouch * 0.6,
+      // duel-3j：大きな胴のあと上体が傾いたまま構えに戻ると、かがみになっていた。かがみは、この拍で上体を新たに倒したときだけ（拍の初めより leanGrow 以上倒した）
+      kagamiL: m.leanX > th.leanX && m.leanX - st.lean > (th.leanGrow ?? 0.05) && Math.abs(dHip) <= th.step && m.drop <= th.crouch * 0.6,
+      kagamiR: m.leanX < -th.leanX && st.lean - m.leanX > (th.leanGrow ?? 0.05) && Math.abs(dHip) <= th.step && m.drop <= th.crouch * 0.6,
       tachi: mk === "tachi",
       kamae: mk === sel,
       _m: m,
     };
   };
   const dur = Object.fromEntries([...DEF_IDS, "kamae"].map((k) => [k, 0]));
-  const peak = { drop: 0, dHip: 0, dBack: 0, leanX: 0 };
+  const peak = { drop: 0, dHip: 0, dBack: 0, leanX: 0, hipDrop: 0 };
   for (let i = 0; i < win.length; i++) {
     const c = cond(win[i]), dt = Math.min(80, (i + 1 < win.length ? win[i + 1].t : we) - win[i].t);
     for (const k of Object.keys(dur)) if (c[k]) dur[k] += dt;
@@ -1086,6 +1097,7 @@ function defenseDurations(frames, ws, we, anc) {
     if (Math.abs(m.hipShift - st.hip) > Math.abs(peak.dHip)) peak.dHip = +(m.hipShift - st.hip).toFixed(3);
     if (Math.abs(m.back - st.back) > Math.abs(peak.dBack)) peak.dBack = +(m.back - st.back).toFixed(3);
     if (Math.abs(m.leanX) > Math.abs(peak.leanX)) peak.leanX = +m.leanX.toFixed(3);
+    if (m.hipDrop > peak.hipDrop) peak.hipDrop = +m.hipDrop.toFixed(3);
   }
   // 姿勢の防御が、窓の前（150ms）から続いていたか
   const preC = pre.map(cond);
@@ -1873,7 +1885,8 @@ function summaryStage3(L) {
       // 拍ごとの決め手（規則）と、拍の後半の様子（構えの形の割合・手の速さ・ターン初めからのずれ）
       const st = (x) => (x ? ` 後半:構え${x.kam} 手${x.hand} ${x.still === undefined ? `腰${x.hip} 沈み${x.drop} 下がり${x.back} 上体${x.lean}` : `止まる${x.still ? "○" : "×"}(腰の幅${x.hip} 下がりの幅${x.back}) 外へ${x.out} 下がった${x.backOut} 沈み${x.drop} 上体${x.lean}`}${x.ok ? "→戻った" : ""}` : "");
       L.push(`  拍ごとの決め手${m.recalc ? `（計算し直し ${m.recalc} の結果を → で）` : ""}:`);
-      for (const t of m.turns) t.beats.forEach((b) => L.push(`    ${t.turn}-${b.k + 1} ${shortName(gameAct(b.judged))}［${b.rule}］${st(b.settle)}${b.rejudged != null ? ` → ${shortName(gameAct(b.rejudged))}［${b.rejudgedRule}］${st(b.rejudgedSettle)}` : ""}`));
+      const pk = (b) => (b.peak ? ` 最大:肩の沈み${b.peak.drop} 腰の沈み${b.peak.hipDrop ?? "-"} 上体${b.peak.leanX}` : "");
+      for (const t of m.turns) t.beats.forEach((b) => L.push(`    ${t.turn}-${b.k + 1} ${shortName(gameAct(b.judged))}［${b.rule}］${pk(b)}${st(b.settle)}${b.rejudged != null ? ` → ${shortName(gameAct(b.rejudged))}［${b.rejudgedRule}］${st(b.rejudgedSettle)}` : ""}`));
       const cl = s.bs.filter((b) => b.cleanP && ATK_NAME[b.pAct]);
       if (cl.length) L.push(`  太刀筋（自分）: ${cl.map((b) => `${shortName(b.pAct)} 面${b.cleanP.plane}/速${b.cleanP.speed}/止${b.cleanP.stop}=${b.cleanP.total}`).join("、")}`);
     }

@@ -237,7 +237,7 @@
 // 拍の決闘ラボ（使い捨ての実験）。本編（suburi-bugeicho）のファイルは読み込まない。
 // 骨格推定・指標・素振りの検出は、同じフォルダの回避判定ラボ（index.html v4）から写したもの。
 const $ = (id) => document.getElementById(id);
-const VERSION = "duel-4f 2026-11-20";
+const VERSION = "duel-4g 2026-11-20";
 const VISION = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
@@ -1817,9 +1817,10 @@ async function inputTurn(L, off, label, simple = false) {
     const { res } = judgeBeats(beats.slice(0, j + 1), L, off.used, an.anchor, ring, simple);
     const r = res[j]; live[j] = r.act;
     kindSound(ACT_KIND(r.act === "kamaeX" ? "kamae" : r.act));
-    const simple = ruleMode() === "simple" && $("p-duel") && document.body.classList.contains("duel");
-    $("big").textContent = simple ? shortName(catOf(gameAct(r.act))) : actName(r.act).replace(/（.*）/, ""); $("big").style.color = "#fff";
-    $("sub").textContent = live.map((a) => shortName(simple ? catOf(gameAct(a)) : gameAct(a))).join(" ・ ");
+    // duel-4g：ここの名前を simple にしていたため、上の行の引数 simple を「使う前に宣言」と見なされ、決闘が1拍目で必ず止まっていた（duel-4d〜4f）
+    const showCat = ruleMode() === "simple" && document.body.classList.contains("duel");
+    $("big").textContent = showCat ? shortName(catOf(gameAct(r.act))) : actName(r.act).replace(/（.*）/, ""); $("big").style.color = "#fff";
+    $("sub").textContent = live.map((a) => shortName(showCat ? catOf(gameAct(a)) : gameAct(a))).join(" ・ ");
   }
   $("cue").textContent = "";
   const fin = judgeBeats(beats, L, off.used, an.anchor, ring, simple);

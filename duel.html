@@ -233,7 +233,7 @@
 // 拍の決闘ラボ（使い捨ての実験）。本編（suburi-bugeicho）のファイルは読み込まない。
 // 骨格推定・指標・素振りの検出は、同じフォルダの回避判定ラボ（index.html v4）から写したもの。
 const $ = (id) => document.getElementById(id);
-const VERSION = "duel-3h 2026-11-19";
+const VERSION = "duel-3i 2026-11-19";
 const VISION = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
@@ -308,6 +308,7 @@ function pickVoice() {
   jaVoice = vs.find((v) => /ja/i.test(v.lang) && /Kyoko|O-ren|Otoya|Hattori/i.test(v.name)) || vs.find((v) => /ja/i.test(v.lang)) || null;
 }
 if (window.speechSynthesis) { pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+let voiceFails = 0;
 // 読み上げて、読み終わるまで待つ（onend が来ない端末のために目安の時間で打ち切る）
 function say(text) {
   return new Promise((resolve) => {
@@ -317,7 +318,10 @@ function say(text) {
     u.lang = "ja-JP"; if (jaVoice) u.voice = jaVoice; u.rate = 1.15; u.volume = 1;
     let done = false; const fin = () => { if (!done) { done = true; resolve(); } };
     u.onend = fin; setTimeout(fin, 800 + text.length * 200);
-    speechSynthesis.cancel(); speechSynthesis.speak(u);
+    // iPhone で読み上げが止まったままになることがあるので、毎回 resume してから話す。始まらなければ記録に残す
+    let started = false; u.onstart = () => { started = true; };
+    speechSynthesis.cancel(); speechSynthesis.resume(); speechSynthesis.speak(u);
+    setTimeout(() => { if (!started) { voiceFails++; logEvent("say_not_started", { text, fails: voiceFails }); speechSynthesis.cancel(); speechSynthesis.resume(); } }, 1500);
   });
 }
 function beep(f = 880, ms = 120, vol = 0.4) {
@@ -1055,11 +1059,13 @@ function defenseDurations(frames, ws, we, anc) {
   const startFs = pre.length ? pre : win.slice(0, 2);
   const avg = (k) => (startFs.length ? startFs.reduce((s, f) => s + M(f)[k], 0) / startFs.length : 0);
   const st = { hip: avg("hipShift"), back: avg("back") };
+  // duel-3i：ステップは、ターンの初めの位置から外へ踏み出したときだけ（中央へ戻る動きはステップにしない。戻ったあと構えれば構え）
+  const outward = (m) => Math.abs(m.hipShift) - Math.abs(st.hip) > th.step * 0.5;
   const cond = (f) => {
     const m = M(f), mk = matchKamae(f).best, dHip = m.hipShift - st.hip;
     return {
       crouch: m.drop > th.crouch,
-      stepL: dHip > th.step, stepR: dHip < -th.step,
+      stepL: dHip > th.step && outward(m), stepR: dHip < -th.step && outward(m),
       // しゃがむと胴と脚の見かけも縮むので、沈んでいる間は下がり・かがみに数えない（前回のラボの「しゃがみが先」と同じ）
       // 横へ足を運ぶと見かけの大きさも少し変わるので、腰がステップの分だけ動いている間は下がりに数えない（実機 duel-3b：ステップ右→下がり）
       back: m.back - st.back > th.back && m.drop <= th.crouch * 0.6 && Math.abs(dHip) <= th.step,
@@ -1092,18 +1098,29 @@ function defenseDurations(frames, ws, we, anc) {
 // 後半（窓の終わりの settle.frac）で：手が登録した構えの形（kamaeRate 以上のコマ）、手がほぼ止まっている（肩から見た手の速さ handMax 未満）、
 // 体がターンの初めの位置・姿勢に戻っている（腰の横ずれ・沈み・下がり・上体の倒れが小さい）なら「構えに戻った」とする
 function settledKamae(frames, ws, we, anc) {
-  const S = J.settle || { frac: 0.35, atkFrom: 0.35, kamaeRate: 0.8, handMax: 1.2, hip: 0.15, drop: 0.15, back: 0.05, lean: 0.12 };
-  const t0 = we - (we - ws) * S.frac;
+  // duel-3i：ターンの初めの位置からのずれでは見ない（ターンの間に立ち位置が少しずつ動き、構えでも下がり0.2・沈み0.15と出ていた）。
+  // 代わりに「後半の間、体が止まっている」「しゃがんでいない」「この拍で外へ踏み出したり下がったりしていない」で見る
+  const S = J.settle || {};
+  const th = J.th;
+  const W = we - ws, t0 = we - W * (S.frac ?? 0.35);
   const fs = frames.filter((f) => f[0] >= t0 && f[0] < we).map(frameObj);
   if (fs.length < 4) return null;
   const sel = selKamae();
   const kam = fs.filter((f) => matchKamae(f).best === sel).length / fs.length;
   const hand = Math.max(...fs.map((f) => f.hr3));
   const ms = fs.map((f) => metrics(rawOf(f), CAL, anc));
-  const mx = (k) => Math.max(...ms.map((m) => Math.abs(m[k])));
-  const back = Math.max(...ms.map((m) => m.back));
-  const ok = kam >= S.kamaeRate && hand < S.handMax && mx("hipShift") < S.hip && mx("drop") < S.drop && back < S.back && mx("leanX") < S.lean;
-  return { ok, kam: +kam.toFixed(2), hand: +hand.toFixed(2), hip: +mx("hipShift").toFixed(3), drop: +mx("drop").toFixed(3), back: +back.toFixed(3), lean: +mx("leanX").toFixed(3) };
+  const rng = (k) => Math.max(...ms.map((m) => m[k])) - Math.min(...ms.map((m) => m[k]));
+  const avg = (xs, k) => xs.reduce((x, m) => x + m[k], 0) / xs.length;
+  const pre = frames.filter((f) => f[0] >= ws - 150 && f[0] < ws).map((f) => metrics(rawOf(frameObj(f)), CAL, anc));
+  const start = pre.length ? pre : ms.slice(0, 1);
+  const out = Math.abs(avg(ms, "hipShift")) - Math.abs(avg(start, "hipShift")); // ＋＝ターンの初めの位置から外へ踏み出した
+  const backOut = avg(ms, "back") - avg(start, "back");                           // ＋＝この拍で下がった
+  const drop = Math.max(...ms.map((m) => m.drop)), lean = Math.max(...ms.map((m) => Math.abs(m.leanX)));
+  const still = rng("hipShift") < (S.moveHip ?? 0.08) && rng("back") < (S.moveBack ?? 0.04) && rng("drop") < (S.moveDrop ?? 0.08);
+  const ok = kam >= (S.kamaeRate ?? 0.7) && hand < (S.handMax ?? 1.5) && still && drop < th.crouch * (S.dropFrac ?? 0.8)
+    && lean < (S.lean ?? 0.15) && out < th.step * 0.7 && backOut < th.back;
+  return { ok, kam: +kam.toFixed(2), hand: +hand.toFixed(2), still, out: +out.toFixed(3), backOut: +backOut.toFixed(3), drop: +drop.toFixed(3), lean: +lean.toFixed(3),
+    hip: +rng("hipShift").toFixed(3), back: +rng("back").toFixed(3) };
 }
 // 1拍の判定（4-2の順番）。used は、前の拍で使った素振り（同じ振りを2つの拍に数えない）
 function judgeBeat({ frames, labeled, ws, we, anc, used }) {
@@ -1140,7 +1157,8 @@ function judgeBeat({ frames, labeled, ws, we, anc, used }) {
     const BS = J.bodySwing || { peakMin: 3, ms: 300 };
     // かがみは横の振りと一緒に出やすい（胴→かがみ左）ので、弱い振りの例外は足・腰の動きのときだけ
     if (body && D.dur[body] >= BS.ms) {
-      if (foot && sw.peak < BS.peakMin) return { ...out, act: body, rule: "2例外 体の動き＋弱い振り" };
+      // 大きく踏み込みながらの胴は、肩から見た手が遅くなるが幅は大きい（実機 duel-3h）。小さい揺れ（幅 ampMax 未満）だけを体の動きとみなす
+      if (foot && sw.peak < BS.peakMin && sw.amp < (BS.ampMax ?? 0.35)) return { ...out, act: body, rule: "2例外 体の動き＋弱い振り" };
       if (body === "crouch" && a.vert === "down") return { ...out, act: body, rule: "2例外 しゃがみ＋振り下ろし" };
     }
     return { ...out, act: a.id, rule: "2 素振り" };
@@ -1853,7 +1871,7 @@ function summaryStage3(L) {
         L.push(`  ${t.turn}: 自分 ${t.beats.map((b) => shortName(b.pAct) + (m.mode === "simple" ? `(${shortName(gameAct(b.judged))})` : "") + (b.judged === "kamaeX" ? "?" : "")).join("・")} ／ 相手 ${t.beats.map((b) => shortName(b.nAct)).join("・")} ／ ${t.beats.map((b) => `${b.label || "―"}${b.dmgP || b.dmgN ? `(${b.dmgP ? "-" + b.dmgP : ""}${b.dmgN ? "→" + b.dmgN : ""})` : ""}`).join("・")}`);
       }
       // 拍ごとの決め手（規則）と、拍の後半の様子（構えの形の割合・手の速さ・ターン初めからのずれ）
-      const st = (x) => (x ? ` 後半:構え${x.kam} 手${x.hand} 腰${x.hip} 沈み${x.drop} 下がり${x.back} 上体${x.lean}${x.ok ? "→戻った" : ""}` : "");
+      const st = (x) => (x ? ` 後半:構え${x.kam} 手${x.hand} ${x.still === undefined ? `腰${x.hip} 沈み${x.drop} 下がり${x.back} 上体${x.lean}` : `止まる${x.still ? "○" : "×"}(腰の幅${x.hip} 下がりの幅${x.back}) 外へ${x.out} 下がった${x.backOut} 沈み${x.drop} 上体${x.lean}`}${x.ok ? "→戻った" : ""}` : "");
       L.push(`  拍ごとの決め手${m.recalc ? `（計算し直し ${m.recalc} の結果を → で）` : ""}:`);
       for (const t of m.turns) t.beats.forEach((b) => L.push(`    ${t.turn}-${b.k + 1} ${shortName(gameAct(b.judged))}［${b.rule}］${st(b.settle)}${b.rejudged != null ? ` → ${shortName(gameAct(b.rejudged))}［${b.rejudgedRule}］${st(b.rejudgedSettle)}` : ""}`));
       const cl = s.bs.filter((b) => b.cleanP && ATK_NAME[b.pAct]);
@@ -1900,6 +1918,7 @@ function summary() {
   const fpsAll = LOG.perf.filter((p) => p.body).map((p) => p.poseFps);
   L.push(`# 拍の決闘ラボ 段階1〜3 要約（版 ${VERSION}、${new Date().toLocaleString()}）`);
   L.push(`端末: ${navigator.userAgent.match(/\(([^)]+)\)/)?.[1] || navigator.userAgent}　骨格FPS 中央${median(fpsAll) ?? "-"}（10%点${q(fpsAll, 0.1) ?? "-"}）`);
+  L.push(`読み上げが始まらなかった回数（このページを開いてから）: ${voiceFails}　読み上げた回数（記録全体）: ${LOG.events.filter((e) => e.type === "say").length}`);
   L.push(`記録の数: 決闘${LOG.matches.length}試合・型と自由4拍${LOG.free4.length}回・1拍の判定${LOG.beatTests.length}拍`);
   L.push("");
   // 一部でエラーが出ても、残りは出してコピーできるようにする（決闘が要約に出ないことがあったため、段階3を先頭に）

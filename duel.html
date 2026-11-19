@@ -52,7 +52,7 @@
   <button data-tab="prep" class="on">準備</button>
   <button data-tab="kamae">構え</button>
   <button data-tab="timing">拍の調整</button>
-  <button data-tab="anchor">構え直し</button>
+  <button data-tab="beat">判定</button>
   <button data-tab="log">記録</button>
   <span id="ver">版 読込中</span>
 </nav>
@@ -85,7 +85,7 @@
       <select id="sel-model"><option value="lite" selected>lite</option><option value="full">full</option></select>
     </div>
   </details>
-  <div class="mut">拍の決闘ラボ（使い捨ての実験）。段階1：構えの登録・拍のタイミング調整・構え直し。
+  <div class="mut">拍の決闘ラボ（使い捨ての実験）。段階1：構えの登録・拍のタイミング調整／段階2：1拍の判定テスト。
     スマホは縦置き、カメラから2〜3m離れて全身が映る位置で。開始のボタンを押したあとは音声で進みます。左下の「止める」でいつでも止まります。</div>
 </div>
 
@@ -127,15 +127,33 @@
   <div id="timing-result"></div>
 </div>
 
-<!-- 構え直し -->
-<div class="panel" id="p-anchor" hidden>
+<!-- 判定テスト（段階2） -->
+<div class="panel" id="p-beat" hidden>
   <div class="row">
-    <button class="b main" id="btn-anchor">構え直しのテスト</button>
-    <label>回数</label><input type="number" id="num-anchor" value="4" min="1" max="10" style="width:4em">
+    <label>1拍</label><select id="sel-beat2"></select>
+    <label>対象</label>
+    <select id="sel-beat-set">
+      <option value="focus" selected>重点（突き・斬り上げ・逆風・刀立て・構え・振りかぶり下がり・起きながら突き）</option>
+      <option value="all">全部（攻撃10・防御7・構え・組み合わせ2）</option>
+      <option value="atk">攻撃10種</option>
+      <option value="def">防御7種と構え</option>
+    </select>
   </div>
-  <div class="mut">「構え直し」の声で、試合で使う構えのまま1秒止まります。その姿勢を回避の指標の基準にします。そのあと5秒は自由に動いてください（1歩ずれた位置で構え直しても、構え直したあとは「構え」と出れば成功）。
-    回避の名前は前回のラボの閾値による仮の表示です（かがみ左右＝足は動かさず上体を左右へ倒す。足が動けばステップ）。</div>
-  <div id="anchor-result"></div>
+  <div class="row">
+    <button class="b main" id="btn-beat1">1つずつのテスト</button>
+    <label>各</label><input type="number" id="num-beat-rep" value="2" min="1" max="10" style="width:4em"><label>回</label>
+  </div>
+  <div class="mut">読み上げた動きを、「カッ、カッ、ドン」のドンで1つ行います。間は自由（構えに戻らなくてよい）。正解ならピロン、違えば判定した名前を言います。</div>
+  <div class="row">
+    <button class="b main" id="btn-beat4">4拍続けてのテスト</button>
+    <label>回数</label><input type="number" id="num-seq" value="5" min="1" max="20" style="width:4em">
+  </div>
+  <div class="mut">読み上げた4つを、「カッ×4」のあとの「ドン×4」で止まらずに続けます（対象で選んだ動きから無作為に4つ）。</div>
+  <div class="row"><button class="b" id="btn-free">試し振り（向きの確かめ）</button></div>
+  <div class="mut">拍なし。振るたびに、判定した攻撃の名前を言います。左下の「止める」で終わります。</div>
+  <details open><summary>攻撃の向き（自分の体から見た振り → 判定の名前）</summary><div class="scroll"><table id="atk-map"></table></div>
+    <div class="mut">向かい合っているので、自分の右側はNPCの左側です。回避の基準は自動（読み上げの間に構えて立っていた姿勢）。</div></details>
+  <div id="beat-result"></div>
 </div>
 
 <!-- 記録 -->
@@ -153,7 +171,7 @@
 // 拍の決闘ラボ（使い捨ての実験）。本編（suburi-bugeicho）のファイルは読み込まない。
 // 骨格推定・指標・素振りの検出は、同じフォルダの回避判定ラボ（index.html v4）から写したもの。
 const $ = (id) => document.getElementById(id);
-const VERSION = "duel-1b 2026-11-19";
+const VERSION = "duel-2c 2026-11-19";
 const VISION = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
@@ -176,7 +194,9 @@ function newLog() {
     kamaeRegs: [],    // 構えの登録1回ずつ
     kamaeChecks: [],  // 構えの確かめの1試行ずつ
     timingRuns: [],   // タイミング調整1回ずつ
-    anchorTests: [],  // 構え直しの1回ずつ
+    anchorTests: [],  // 構え直しの1回ずつ（duel-1。段階2でやめた）
+    beatTests: [],    // 段階2：1拍の判定の1つずつ
+    freeSwings: [],   // 段階2：試し振り
   };
 }
 const idb = {
@@ -198,7 +218,7 @@ const within = (p, ms, v) => Promise.race([p, new Promise((r) => setTimeout(() =
 const useIdb = await within(idb.open(), 2000, false);
 let LOG = useIdb ? await within(idb.get(LOG_KEY), 3000, undefined) : lsGet(LOG_KEY);
 LOG ||= newLog();
-for (const k of ["sessions", "events", "perf", "kamaeRegs", "kamaeChecks", "timingRuns", "anchorTests"]) LOG[k] ||= [];
+for (const k of ["sessions", "events", "perf", "kamaeRegs", "kamaeChecks", "timingRuns", "anchorTests", "beatTests", "freeSwings"]) LOG[k] ||= [];
 $("ver").textContent = `版 ${VERSION}`;
 const T0 = performance.now(), T0wall = Date.now();
 const now = () => performance.now();
@@ -464,7 +484,10 @@ function shoulder3Of(wl) {
 
 // ---------- 1コマごとの処理 ----------
 // frames に残す量（この順の配列。先頭は時刻）
-const FIELDS = ["kx", "ky", "gap", "gapY", "kz", "shift", "drop", "back", "hipShift", "leanX", "leanZ", "hr3", "r3x", "r3y", "r3z"];
+const FIELDS = ["kx", "ky", "gap", "gapY", "kz", "shift", "drop", "back", "hipShift", "leanX", "leanZ", "hr3", "r3x", "r3y", "r3z",
+  // 段階2：回避の基準を後から選べるように、位置の生の量も残す
+  "rsmx", "rsmy", "rhmx", "rhmy", "rT", "rleg", "rleanZ"];
+const ring = []; // 直近12秒のコマ（判定はここから切り出す）
 let CAL = lsGet(CAL_KEY);
 let anchor = CAL ? { ...CAL } : null;
 const recentRaw = [];
@@ -479,7 +502,7 @@ function onPose(lm, wl, t) {
     if (!busy) { $("big").textContent = lm ? "肩・腰が見えない" : "体が見えない"; $("big").style.color = "#e8664f"; $("sub").textContent = ""; }
     return;
   }
-  recentRaw.push({ t, r }); while (recentRaw.length && t - recentRaw[0].t > 3500) recentRaw.shift();
+  recentRaw.push({ t, r }); while (recentRaw.length && t - recentRaw[0].t > 6000) recentRaw.shift();
   const m = CAL && anchor ? metrics(r, CAL, anchor) : { shift: 0, drop: 0, back: 0, hipShift: 0, leanX: 0, leanZ: 0 };
   // 肩の中点から見た手首（前回のラボ v3 と同じならし方）
   const h3 = hand3Of(wl), s3 = shoulder3Of(wl);
@@ -493,11 +516,14 @@ function onPose(lm, wl, t) {
       rel3s = { t, p, s: rel3s.s * 0.4 + v * 0.6 };
     }
   }
-  const cur = { kx: r.kx, ky: r.ky, gap: r.gap, gapY: r.gapY, kz: r.kz, ...m, hr3: rel3s?.s ?? 0, r3x: rel3s?.p[0] ?? 0, r3y: rel3s?.p[1] ?? 0, r3z: rel3s?.p[2] ?? 0 };
+  const cur = { kx: r.kx, ky: r.ky, gap: r.gap, gapY: r.gapY, kz: r.kz, ...m, hr3: rel3s?.s ?? 0, r3x: rel3s?.p[0] ?? 0, r3y: rel3s?.p[1] ?? 0, r3z: rel3s?.p[2] ?? 0,
+    rsmx: r.smx, rsmy: r.smy, rhmx: r.hmx, rhmy: r.hmy, rT: r.T, rleg: r.leg ?? 0, rleanZ: r.leanZ ?? 0 };
   // 軽くならす（3Dの手は、もうならしてある）
-  live = live ? Object.fromEntries(FIELDS.map((k) => [k, k === "hr3" || k.startsWith("r3") ? cur[k] : live[k] * 0.5 + cur[k] * 0.5])) : cur;
+  live = live ? Object.fromEntries(FIELDS.map((k) => [k, k === "hr3" || k.startsWith("r3") || (k === "rleg" && (!cur[k] || !live[k])) ? cur[k] : live[k] * 0.5 + cur[k] * 0.5])) : cur;
   live.t = t;
-  if (capture) capture.frames.push([Math.round(t), ...FIELDS.map((k) => +live[k].toFixed(3))]);
+  const fa = [Math.round(t), ...FIELDS.map((k) => +live[k].toFixed(k[0] === "r" && k[1] !== "3" ? 4 : 3))];
+  ring.push(fa); while (ring.length && t - ring[0][0] > 12000) ring.shift();
+  if (capture) capture.frames.push(fa);
   if (!busy || showLiveDuringRun) showLive(t);
 }
 let showLiveDuringRun = false;
@@ -845,21 +871,14 @@ function showTiming() {
 showTiming();
 
 // =====================================================================
-// 構え直し（毎ターンの入力の前に1秒。回避の指標の基準をその場の姿勢で取り直す）
+// 段階2：1拍の判定（構え直しの1秒はなし。回避の基準は自動で取る）
 // =====================================================================
-// 段階3以降も、この reanchor() をそのまま使う
-async function reanchor(ms = J.reanchorMs) {
-  const rec = await record(ms);
-  const an = avgRaw(rec.t0, rec.t1);
-  const rows = rec.frames.map(frameObj);
-  const sel = selKamae();
-  const inKamae = rows.length ? rows.filter((f) => matchKamae(f).best === sel).length / rows.length : 0;
-  const res = { t0: Math.round(rec.t0), ok: !!an, moving: an ? an.sdX > J.reanchorMoveMax : null, sdX: an ? +an.sdX.toFixed(3) : null, kamae: sel, inKamae: +inKamae.toFixed(2), n: rows.length, miss: rec.miss.length };
-  if (an) { anchor = { ...an }; live = null; }
-  return res;
-}
-// 仮の回避の表示（前回のラボの閾値）。かがみ左右＝足は動かさず上体を左右へ倒す（腰が動けばステップ。ステップを先に見る）
+// ・基準：その拍（ターン）の前の3.5秒から「選んだ構えで400ms止まっていた」ところを後ろから探して使う。無ければ直前400msの姿勢
+// ・攻撃：その拍の窓に、素振りの速さの山が入った振り（振りかぶり・構えに戻る動きは除く）
+// ・動き（ステップ・下がり）：その拍の窓の始まりの位置からどれだけ動いたか。1歩出たらそこに留まってよい
+// ・姿勢（しゃがみ・かがみ・刀立て・構え）：基準と比べてその形か。続けていれば毎拍その行動（「前の拍から続いている」印）
 let liveDefenseOn = false;
+// 仮の回避の表示（前回のラボの閾値）。かがみ左右＝足は動かさず上体を左右へ倒す（腰が動けばステップ。ステップを先に見る）
 function provisionalDefense(m, mk) {
   const th = J.th;
   if (m.drop > th.crouch) return { id: "crouch", name: "しゃがみ", color: "#ff8f6b" };
@@ -872,50 +891,389 @@ function provisionalDefense(m, mk) {
   if (mk.best === selKamae()) return { id: "kamae", name: `構え（${KAMAE_NAME[mk.best]}）`, color: "#ddd" };
   return { id: "none", name: "判定なし", color: "#999" };
 }
-async function anchorTest() {
-  if (!needReady({ kamae: true })) return;
-  if (!CAL) { alert("先に中段を登録してください（回避の基準に使います）"); return; }
-  const n = Math.max(1, +$("num-anchor").value || 4);
-  const runId = (LOG.anchorTests.at(-1)?.runId || 0) + 1;
-  beginRun(); showLiveDuringRun = true;
+
+// ---------- 攻撃の向き：プレイヤーの体から見た向き → NPCの体から見た向き ----------
+// 向かい合っているので、プレイヤーの右側はNPCの左側。表の左右（〜・右／〜・左）はNPCの体から見た向き。
+// 例：プレイヤーの右上から左下へ斬り下ろす → NPCの左肩から右腰へ抜ける → 「袈裟・左」
+const PLAYER_TO_NPC = { right: "L", left: "R" };
+// 変換の表（プレイヤーの動き → 攻撃の名前）。画面の「攻撃の向き」にもこの表を出す
+const ATK_HINT = {
+  makko: "真上から真下へ",
+  kesaR: "自分の左上→右下", kesaL: "自分の右上→左下",
+  doR: "自分の左→右（横）", doL: "自分の右→左（横）",
+  kiriageR: "自分の左下→右上", kiriageL: "自分の右下→左上",
+  gyakufu: "真下から真上へ",
+  tsukiR: "自分の左に引いて突く", tsukiL: "自分の右に引いて突く",
+};
+const DEF_HINT = {
+  stepL: "自分の左へ足を運ぶ", stepR: "自分の右へ足を運ぶ", back: "後ろへ下がる",
+  kagamiL: "足は動かさず上体を自分の左へ倒す", kagamiR: "足は動かさず上体を自分の右へ倒す",
+  crouch: "しゃがむ", tachi: "刀を立てる",
+};
+const ATK_NAME = CFG.attacks, DEFN = CFG.defenses;
+const DEF_IDS = Object.keys(DEFN);
+const POSTURE_DEF = ["crouch", "kagamiL", "kagamiR", "tachi"]; // 姿勢で見る防御（続けていれば毎拍）
+function actName(id) {
+  if (ATK_NAME[id]) return ATK_NAME[id];
+  if (DEFN[id]) return DEFN[id];
+  return { kamae: `構え（${KAMAE_NAME[selKamae()]}）`, kamaeX: "構え扱い（判定できない）", open: "棒立ち（画面外）" }[id] || id;
+}
+const ACT_KIND = (id) => (ATK_NAME[id] ? "attack" : DEFN[id] ? "defense" : id === "open" ? "open" : "kamae");
+// 行動の種類ごとの短い音
+function kindSound(kind) {
+  if (kind === "attack") { beep(1400, 50, 0.35); setTimeout(() => beep(1900, 60, 0.35), 70); }
+  else if (kind === "defense") beep(700, 140, 0.35);
+  else if (kind === "open") beep(160, 350, 0.45);
+  else beep(440, 160, 0.2);
+}
+
+// 素振りの1本の向き（方向 dir は振り始め→一番遠い点。x+＝自分の右、y+＝下、z+＝前）→ 攻撃の種類
+function classifyAttack(sw, frames) {
+  const A = J.attack || { thrustZ: 0.6, vertDeg: 25, horizDeg: 65 };
+  const [dx, dy, dz] = sw.dir;
+  const ix = FIELDS.indexOf("r3x") + 1;
+  const f0 = frames.find((f) => f[0] >= sw.onset);
+  const startX = f0 ? +f0[ix].toFixed(3) : 0; // 振り始めの手の横（肩の中点から、+が自分の右、m）
+  const angle = Math.round(Math.atan2(Math.abs(dx), Math.abs(dy)) * 180 / Math.PI); // 0=縦 90=横
+  if (dz > A.thrustZ && dz >= Math.abs(dx) && dz >= Math.abs(dy)) {
+    const fromRight = startX >= 0;
+    return { id: "tsuki" + PLAYER_TO_NPC[fromRight ? "right" : "left"], vert: "fwd", angle, startX, desc: `突き：自分の${fromRight ? "右" : "左"}に引いて` };
+  }
+  const fromRight = dx < 0; // 自分の右から左へ動いた＝自分の右側から振り始めた
+  const side = PLAYER_TO_NPC[fromRight ? "right" : "left"];
+  if (angle < A.vertDeg) return dy > 0 ? { id: "makko", vert: "down", angle, startX, desc: "縦に振り下ろし" } : { id: "gyakufu", vert: "up", angle, startX, desc: "縦に振り上げ" };
+  if (angle > A.horizDeg) return { id: "do" + side, vert: "flat", angle, startX, desc: `横：自分の${fromRight ? "右→左" : "左→右"}` };
+  if (dy > 0) return { id: "kesa" + side, vert: "down", angle, startX, desc: `自分の${fromRight ? "右上→左下" : "左上→右下"}` };
+  return { id: "kiriage" + side, vert: "up", angle, startX, desc: `自分の${fromRight ? "右下→左上" : "左下→右上"}` };
+}
+// 素振りの1本ずつに役を付ける（攻撃／振りかぶり・構えに戻る＝攻撃でない）。続いた2本（間が200ms未満・反対向き・速さの山の間が0.6拍以内）だけを見る：
+//  ・前へ突く1本があれば、それが攻撃（突きの前の引き・後の戻しは後ろ向きなので攻撃でない）
+//  ・それ以外は速い方が攻撃（振りかぶりも構えに戻る動きも、ふつう振りより遅い）。後の1本が前の1本の8割以上速ければ後が攻撃
+//  ※「構えの手の位置で終わるか」で戻りを見分ける案は、真向が中段の高さで止まるため使えなかった（PCの確かめ、duel-2b）
+//  4拍で続けて攻撃したとき（真向→逆風など）は、速さの山の間が1拍近く空くので、両方とも攻撃のまま
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+function labelSwings(swings, frames, L = 1000) {
+  const s = [...swings].sort((a, b) => a.onset - b.onset).map((x) => ({ ...x }));
+  const A_ = J.attack || { thrustZ: 0.6 };
+  const fwd = (x) => x.dir[2] > A_.thrustZ && x.dir[2] >= Math.abs(x.dir[0]) && x.dir[2] >= Math.abs(x.dir[1]);
+  const gapMax = Math.min(600, 0.6 * L);
+  for (let i = 0; i < s.length - 1; i++) {
+    const A = s[i], B = s[i + 1];
+    if (A.role || B.onset - A.end > 200 || dot3(A.dir, B.dir) >= -0.3 || B.peakT - A.peakT > gapMax) continue;
+    if (fwd(A) !== fwd(B)) { (fwd(A) ? B : A).role = fwd(A) ? "return" : "windup"; continue; }
+    if (B.peak >= A.peak * 0.8) A.role = "windup"; else B.role = "return";
+  }
+  for (const x of s) x.role ||= "attack";
+  return s;
+}
+// その拍の窓（ws〜we）で、骨格が取れていた時間の割合
+function visibleFrac(frames, ws, we) {
+  const fs = frames.filter((f) => f[0] >= ws && f[0] < we);
+  let vis = 0;
+  for (let i = 0; i < fs.length; i++) { const nx = i + 1 < fs.length ? fs[i + 1][0] : we; vis += Math.min(80, nx - fs[i][0]); }
+  return vis / (we - ws);
+}
+const rawOf = (f) => ({ smx: f.rsmx, smy: f.rsmy, hmx: f.rhmx, hmy: f.rhmy, T: f.rT, leg: f.rleg || null, leanZ: f.rleanZ });
+// 防御・構えの、窓の中で続いた時間（ms）。動きは窓の始まりの位置から、姿勢は基準から
+function defenseDurations(frames, ws, we, anc) {
+  const th = J.th, sel = selKamae();
+  const pre = frames.filter((f) => f[0] >= ws - 150 && f[0] < ws).map(frameObj);
+  const win = frames.filter((f) => f[0] >= ws && f[0] < we).map(frameObj);
+  const M = (f) => metrics(rawOf(f), CAL, anc);
+  const startFs = pre.length ? pre : win.slice(0, 2);
+  const avg = (k) => (startFs.length ? startFs.reduce((s, f) => s + M(f)[k], 0) / startFs.length : 0);
+  const st = { hip: avg("hipShift"), back: avg("back") };
+  const cond = (f) => {
+    const m = M(f), mk = matchKamae(f).best, dHip = m.hipShift - st.hip;
+    return {
+      crouch: m.drop > th.crouch,
+      stepL: dHip > th.step, stepR: dHip < -th.step,
+      // しゃがむと胴と脚の見かけも縮むので、沈んでいる間は下がり・かがみに数えない（前回のラボの「しゃがみが先」と同じ）
+      back: m.back - st.back > th.back && m.drop <= th.crouch * 0.6,
+      kagamiL: m.leanX > th.leanX && Math.abs(dHip) <= th.step && m.drop <= th.crouch * 0.6,
+      kagamiR: m.leanX < -th.leanX && Math.abs(dHip) <= th.step && m.drop <= th.crouch * 0.6,
+      tachi: mk === "tachi",
+      kamae: mk === sel,
+      _m: m,
+    };
+  };
+  const dur = Object.fromEntries([...DEF_IDS, "kamae"].map((k) => [k, 0]));
+  const peak = { drop: 0, dHip: 0, dBack: 0, leanX: 0 };
+  for (let i = 0; i < win.length; i++) {
+    const c = cond(win[i]), dt = Math.min(80, (i + 1 < win.length ? win[i + 1].t : we) - win[i].t);
+    for (const k of Object.keys(dur)) if (c[k]) dur[k] += dt;
+    const m = c._m;
+    if (Math.abs(m.drop) > Math.abs(peak.drop)) peak.drop = +m.drop.toFixed(3);
+    if (Math.abs(m.hipShift - st.hip) > Math.abs(peak.dHip)) peak.dHip = +(m.hipShift - st.hip).toFixed(3);
+    if (Math.abs(m.back - st.back) > Math.abs(peak.dBack)) peak.dBack = +(m.back - st.back).toFixed(3);
+    if (Math.abs(m.leanX) > Math.abs(peak.leanX)) peak.leanX = +m.leanX.toFixed(3);
+  }
+  // 姿勢の防御が、窓の前（150ms）から続いていたか
+  const preC = pre.map(cond);
+  const cont = Object.fromEntries(POSTURE_DEF.map((k) => [k, preC.length > 0 && preC.filter((c) => c[k]).length >= preC.length / 2]));
+  for (const k of Object.keys(dur)) dur[k] = Math.round(dur[k]);
+  return { dur, cont, peak };
+}
+// 1拍の判定（4-2の順番）。used は、前の拍で使った素振り（同じ振りを2つの拍に数えない）
+function judgeBeat({ frames, labeled, ws, we, anc, used }) {
+  const th = J.th, out = { ws: Math.round(ws), we: Math.round(we) };
+  const vf = visibleFrac(frames, ws, we);
+  out.missFrac = +(1 - vf).toFixed(2);
+  const D = defenseDurations(frames, ws, we, anc);
+  out.defDur = D.dur; out.peak = D.peak;
+  // 1. 体が画面から外れている
+  if (out.missFrac >= J.offscreenFrac) return { ...out, act: "open", rule: "1 画面外" };
+  // 2. 素振り → 攻撃
+  const atks = labeled.filter((s) => s.role === "attack" && !used.has(s.onset) && s.peakT >= ws && s.peakT < we);
+  if (atks.length) {
+    const sw = atks.sort((a, b) => b.peak - a.peak)[0];
+    used.add(sw.onset);
+    const a = classifyAttack(sw, frames);
+    out.swing = { peak: sw.peak, amp: sw.amp, dir: sw.dir, onset: sw.onset, peakT: sw.peakT, offsetInWin: Math.round(sw.peakT - (ws + we) / 2), ...a, n: atks.length };
+    // 例外：同じ拍で下がりが出ていて、振りが上向き（振りかぶり）なら下がり
+    if (D.dur.back >= th.holdMs && a.vert === "up") return { ...out, act: "back", rule: "2例外 下がり＋振りかぶり" };
+    return { ...out, act: a.id, rule: "2 素振り" };
+  }
+  // 3. 防御が150ms以上 → 続いた時間が一番長いもの
+  const best = DEF_IDS.filter((k) => D.dur[k] >= th.holdMs).sort((a, b) => D.dur[b] - D.dur[a])[0];
+  if (best) return { ...out, act: best, rule: "3 防御", cont: !!D.cont[best] };
+  // 4. 登録した構え
+  if (D.dur.kamae >= th.holdMs) return { ...out, act: "kamae", rule: "4 構え" };
+  // 5. どれでもない → 構え扱い
+  return { ...out, act: "kamaeX", rule: "5 判定できない" };
+}
+// 自動の基準：tEnd より前の3.5秒から、選んだ構えで400ms止まっていたところを後ろから探す（しゃがんだままの姿勢は使わない）
+function autoAnchor(tEnd) {
+  const sel = selKamae();
+  const xs = recentRaw.filter((x) => x.t <= tEnd && x.t >= tEnd - 3500);
+  for (let e = xs.length - 1; e >= 0; e -= 3) {
+    const t1 = xs[e].t, seg = xs.filter((x) => x.t > t1 - 400 && x.t <= t1);
+    if (seg.length < 8) continue;
+    if (seg.filter((x) => matchKamae(x.r).best === sel).length / seg.length < 0.8) continue;
+    const a = avgRaw(t1 - 400, t1);
+    if (!a || a.sdX > J.reanchorMoveMax) continue;
+    if ((a.smy - CAL.smy) / CAL.T > J.th.crouch * 0.6) continue;
+    return { anchor: a, src: "構え", age: Math.round(tEnd - t1) };
+  }
+  const a = avgRaw(tEnd - 400, tEnd);
+  return a ? { anchor: a, src: "直前", age: 0 } : { anchor: { ...CAL }, src: "登録時", age: null };
+}
+// 太鼓を並べる（list：開始からの ms と大小）。返り値は各音の performance.now() の時刻
+function scheduleDrums(list) {
+  const a0 = ac.currentTime + 0.3, base = now(), abase = ac.currentTime;
+  return list.map((x) => { const a = a0 + x.dt / 1000; drumAt(a, x.big); return base + (a - abase) * 1000; });
+}
+// 拍の窓の中心のずれ（タイミング調整値）。大きすぎる値は ±35% に抑える（0.8秒の調整値が怪しかったため）
+function beatOffset(L) {
+  const raw = TIMING.byBeat[L]?.offsetMs ?? 0, c = L * (J.timingClampFrac ?? 0.35);
+  return { raw, used: Math.round(Math.max(-c, Math.min(c, raw))) };
+}
+// 並んだ拍をまとめて判定する
+function judgeBeats(beatsT, L, off, anc) {
+  const tA = beatsT[0] + off - L / 2 - 1500, tB = beatsT.at(-1) + off + L / 2 + 500;
+  const frames = ring.filter((f) => f[0] >= tA && f[0] <= tB);
+  const labeled = labelSwings(swingsOf(frames), frames, L);
+  const used = new Set();
+  const res = beatsT.map((B, k) => { const ws = B + off - L / 2; const r = judgeBeat({ frames, labeled, ws, we: ws + L, anc, used }); r.k = k; r.beatT = Math.round(B); return r; });
+  return { res, frames, labeled };
+}
+
+// ---------- テストの項目 ----------
+const TEST_ITEMS = [
+  ...Object.keys(ATK_NAME).map((id) => ({ id, expect: id, name: ATK_NAME[id], say: ATK_NAME[id].replace("・", "、"), hint: ATK_HINT[id], group: "atk" })),
+  ...DEF_IDS.map((id) => ({ id, expect: id, name: DEFN[id], say: DEFN[id], hint: DEF_HINT[id], group: "def" })),
+  { id: "kamae", expect: "kamae", name: "構え", say: "構え", hint: "登録した構えのまま", group: "def" },
+  { id: "backWindup", expect: "back", name: "振りかぶりながら下がる", say: "振りかぶりながら、下がる", hint: "下がりと出れば正解", group: "combo" },
+  { id: "riseThrust", expect: "tsuki", name: "起きながら突く", say: "しゃがんで、起きながら突く", hint: "先にしゃがみ、ドンで起きながら突く。突きと出れば正解", group: "combo" },
+];
+const ITEM = Object.fromEntries(TEST_ITEMS.map((x) => [x.id, x]));
+const FOCUS = ["tsukiR", "tsukiL", "kiriageR", "kiriageL", "gyakufu", "tachi", "kamae", "backWindup", "riseThrust"];
+const itemSet = () => {
+  const v = $("sel-beat-set").value;
+  return v === "focus" ? FOCUS.map((id) => ITEM[id]) : v === "atk" ? TEST_ITEMS.filter((x) => x.group === "atk") : v === "def" ? TEST_ITEMS.filter((x) => x.group === "def") : TEST_ITEMS;
+};
+const isOk = (it, act) => (it.expect === "tsuki" ? act.startsWith("tsuki") : act === it.expect);
+const itemName = (it) => (it.id === "kamae" ? `構え（${KAMAE_NAME[selKamae()]}）` : it.name);
+for (const ms of CFG.beatMsChoices) { const o = document.createElement("option"); o.value = ms; o.textContent = `${(ms / 1000).toFixed(1)}秒`; $("sel-beat2").append(o); }
+$("atk-map").innerHTML = `<tr><th>自分の体から見た振り</th><th>判定の名前（NPCの体から見た向き）</th></tr>` +
+  Object.keys(ATK_HINT).map((id) => `<tr><td style="text-align:left">${ATK_HINT[id]}</td><td style="text-align:left">${ATK_NAME[id]}</td></tr>`).join("");
+function beatReady() {
+  if (!needReady({ kamae: true })) return false;
+  if (!CAL) { alert("先に中段を登録してください（回避の基準に使います）"); return false; }
+  return true;
+}
+const runIdOf = (arr) => (arr.at(-1)?.runId || 0) + 1;
+const fmtOff = (o) => `${o.used >= 0 ? "+" : ""}${o.used}ms${o.used !== o.raw ? `（調整値${o.raw}を抑えた）` : ""}`;
+function showResultBig(r, ok) {
+  $("big").textContent = actName(r.act); $("big").style.color = ok == null ? "#fff" : ok ? "#5fd18a" : "#e8664f";
+  $("sub").textContent = r.swing ? `${r.swing.desc}　速さ${r.swing.peak}` : r.rule;
+}
+
+// ---------- 1つずつのテスト ----------
+async function runBeatTest() {
+  if (!beatReady()) return;
+  const L = +$("sel-beat2").value, off = beatOffset(L), reps = Math.max(1, +$("num-beat-rep").value || 2);
+  let order;
+  const ids = itemSet();
+  for (let k = 0; k < 50; k++) { order = shuffle(ids.flatMap((it) => Array(reps).fill(it))); if (order.every((x, i) => i === 0 || x !== order[i - 1])) break; }
+  const runId = runIdOf(LOG.beatTests);
+  beginRun(); showLiveDuringRun = false;
   try {
-    await say(`構え直しのテスト。${KAMAE_NAME[selKamae()]}で始めます`);
-    await wait(2500);
-    for (let i = 0; i < n; i++) {
-      liveDefenseOn = false;
-      $("cue").textContent = "構え直し";
-      await say("構え直し");
-      beep(900, 100);
-      const res = await reanchor();
-      beep(1500, 120);
-      $("cue").textContent = res.moving ? "動いていた" : res.inKamae < 0.5 ? "構えが違う" : "";
-      // そのあと5秒は自由に動く。直後0.5秒の指標（0に近いはず）と、5秒の間に出た仮の回避を記録
-      liveDefenseOn = true;
-      const after = await record(5000);
-      const rows = after.frames.map(frameObj);
-      const first = rows.filter((f) => f.t - after.t0 < 500);
-      const maxAbs = (k, xs) => (xs.length ? +Math.max(...xs.map((f) => Math.abs(f[k]))).toFixed(3) : null);
-      const seen = {}; for (const f of rows) { const d = provisionalDefense(f, matchKamae(f)).id; seen[d] = (seen[d] || 0) + 1; }
-      LOG.anchorTests.push({ runId, i, at: iso(res.t0), ...res, anchor, first500: { hipShift: maxAbs("hipShift", first), drop: maxAbs("drop", first), back: maxAbs("back", first), leanX: maxAbs("leanX", first) }, seen });
-      saveLogSoon();
+    await say(`判定テスト。全部で${order.length}回です。カッ、カッ、ドンのドンで動いてください`);
+    await wait(1500);
+    for (let i = 0; i < order.length; i++) {
+      const it = order[i];
+      $("cue").textContent = itemName(it); $("big").textContent = ""; $("sub").textContent = it.hint || "";
+      await say(it.id === "kamae" ? KAMAE_NAME[selKamae()] : it.say);
+      const an = autoAnchor(now());
+      const [, , B] = scheduleDrums([{ dt: 0, big: false }, { dt: L, big: false }, { dt: 2 * L, big: true }]);
+      await waitUntil(B + off.used + L / 2 + 500);
       $("cue").textContent = "";
+      const { res, labeled } = judgeBeats([B], L, off.used, an.anchor);
+      const r = res[0], ok = isOk(it, r.act);
+      kindSound(ACT_KIND(r.act === "kamaeX" ? "kamae" : r.act));
+      showResultBig(r, ok);
+      LOG.beatTests.push({ runId, mode: "single", i, at: iso(B), label: it.id, expect: it.expect, ok, beatMs: L, offset: off, anchorSrc: an.src, anchorAge: an.age, kamae: selKamae(), ...r,
+        swingsAll: labeled.map((s) => ({ onset: s.onset, peakT: s.peakT, peak: s.peak, dir: s.dir, role: s.role })), fps: shown.poseFps });
+      saveLogSoon();
+      await wait(350);
+      if (ok) { beep(1300, 70); setTimeout(() => beep(1700, 90), 90); await wait(500); }
+      else await say(actName(r.act).replace("・", "、").replace(/（.*）/, ""));
+      await wait(500);
     }
-    liveDefenseOn = false;
     await say("テストを終わります");
   } catch (e) { if (e !== STOP) throw e; }
-  finally { liveDefenseOn = false; showLiveDuringRun = false; anchor = CAL ? { ...CAL } : null; live = null; endRun(); showAnchor(); }
+  finally { endRun(); showBeatResult(); }
 }
-$("btn-anchor").onclick = anchorTest;
-const DEF_NAME = { crouch: "しゃがみ", stepL: "ステップ左", stepR: "ステップ右", kagamiL: "かがみ左", kagamiR: "かがみ右", back: "下がり", tachi: "刀立て", kamae: "構え", none: "判定なし" };
-function showAnchor() {
-  const last = LOG.anchorTests.at(-1)?.runId;
-  const ts = LOG.anchorTests.filter((t) => t.runId === last);
-  if (!ts.length) { $("anchor-result").innerHTML = ""; return; }
-  $("anchor-result").innerHTML = `<div class="scroll"><table><tr><th>回</th><th>動いていた</th><th>構えの一致</th><th>直後0.5秒 腰の横ずれ</th><th>沈み</th><th>下がり</th><th>5秒の間に出たもの（コマ数）</th></tr>` +
-    ts.map((t) => `<tr><td>${t.i + 1}</td><td>${t.moving ? "はい" : "いいえ"}</td><td>${Math.round(t.inKamae * 100)}%</td><td>${t.first500.hipShift ?? "-"}</td><td>${t.first500.drop ?? "-"}</td><td>${t.first500.back ?? "-"}</td>` +
-      `<td style="text-align:left">${Object.entries(t.seen).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${DEF_NAME[k] || k}${v}`).join(" ")}</td></tr>`).join("") + "</table></div>";
+$("btn-beat1").onclick = runBeatTest;
+
+// ---------- 4拍続けてのテスト ----------
+async function runSeqTest() {
+  if (!beatReady()) return;
+  const L = +$("sel-beat2").value, off = beatOffset(L), n = Math.max(1, +$("num-seq").value || 5);
+  const pool = itemSet().filter((x) => x.group !== "combo");
+  const runId = runIdOf(LOG.beatTests);
+  beginRun();
+  try {
+    await say(`4拍のテスト。${n}回です。読み上げた4つを、ドン、ドン、ドン、ドンで続けて動いてください`);
+    await wait(1000);
+    for (let s = 0; s < n; s++) {
+      const seq = Array.from({ length: 4 }, () => pool[Math.floor(Math.random() * pool.length)]);
+      $("cue").textContent = ""; $("big").textContent = "";
+      $("sub").textContent = seq.map(itemName).join(" → ");
+      await say(seq.map((it) => (it.id === "kamae" ? KAMAE_NAME[selKamae()] : it.say)).join("、"));
+      const an = autoAnchor(now());
+      const ts = scheduleDrums([0, 1, 2, 3].map((k) => ({ dt: k * L, big: false })).concat([4, 5, 6, 7].map((k) => ({ dt: k * L, big: true }))));
+      const beats = ts.slice(4);
+      for (let k = 0; k < 4; k++) { await waitUntil(beats[k] - 30); $("cue").textContent = `${k + 1}　${itemName(seq[k])}`; }
+      await waitUntil(beats[3] + off.used + L / 2 + 500);
+      $("cue").textContent = "";
+      const { res } = judgeBeats(beats, L, off.used, an.anchor);
+      const oks = res.map((r, k) => isOk(seq[k], r.act));
+      res.forEach((r, k) => LOG.beatTests.push({ runId, mode: "seq", seqId: s, i: s * 4 + k, pos: k, at: iso(r.beatT), label: seq[k].id, expect: seq[k].expect, ok: oks[k], beatMs: L, offset: off, anchorSrc: an.src, anchorAge: an.age, kamae: selKamae(), seq: seq.map((x) => x.id), ...r, fps: shown.poseFps }));
+      saveLogSoon();
+      $("big").textContent = `${oks.filter(Boolean).length} / 4`; $("big").style.color = oks.every(Boolean) ? "#5fd18a" : "#fff";
+      $("sub").textContent = res.map((r, k) => `${oks[k] ? "○" : "×"}${actName(r.act).replace(/（.*）/, "")}`).join("  ");
+      const wrong = res.map((r, k) => (oks[k] ? null : `${k + 1}拍目、${actName(r.act).replace("・", "、").replace(/（.*）/, "")}`)).filter(Boolean);
+      await say(wrong.length ? wrong.join("。") : "全部正解");
+      await wait(1200);
+    }
+    await say("テストを終わります");
+  } catch (e) { if (e !== STOP) throw e; }
+  finally { endRun(); showBeatResult(); }
 }
-showAnchor();
+$("btn-beat4").onclick = runSeqTest;
+
+// ---------- 試し振り（拍なし。振るたびに判定した攻撃の名前を出して読み上げる） ----------
+async function runFree() {
+  if (!needReady()) return;
+  const runId = runIdOf(LOG.freeSwings);
+  beginRun(); showLiveDuringRun = false;
+  let last = now();
+  try {
+    $("big").textContent = "試し振り"; $("big").style.color = "#fff"; $("sub").textContent = "振るたびに攻撃の名前を出します";
+    await say("試し振り。振るたびに、攻撃の名前を言います");
+    while (true) {
+      await wait(250);
+      const t = now();
+      const frames = ring.filter((f) => f[0] >= t - 4000);
+      const labeled = labelSwings(swingsOf(frames), frames);
+      const fresh = labeled.filter((s) => s.role === "attack" && s.onset > last && s.end < t - 250);
+      for (const sw of fresh) {
+        last = sw.onset;
+        const a = classifyAttack(sw, frames);
+        $("big").textContent = ATK_NAME[a.id]; $("big").style.color = "#fff";
+        $("sub").textContent = `${a.desc}　角度${a.angle}°　速さ${sw.peak}`;
+        kindSound("attack");
+        LOG.freeSwings.push({ runId, at: iso(sw.peakT), act: a.id, ...a, peak: sw.peak, amp: sw.amp, dir: sw.dir, roles: labeled.map((s) => s.role).join(",") });
+        saveLogSoon();
+        say(ATK_NAME[a.id].replace("・", "、"));
+      }
+    }
+  } catch (e) { if (e !== STOP) throw e; }
+  finally { endRun(); showBeatResult(); }
+}
+$("btn-free").onclick = runFree;
+
+// ---------- 結果 ----------
+const actShort = (id) => actName(id).replace(/（.*）/, "");
+function beatConfusion(ts) {
+  const rows = [...new Set(ts.map((t) => t.label))].sort((a, b) => TEST_ITEMS.findIndex((x) => x.id === a) - TEST_ITEMS.findIndex((x) => x.id === b));
+  const m = {}; for (const t of ts) { m[t.label] ||= {}; m[t.label][t.act] = (m[t.label][t.act] || 0) + 1; }
+  return { rows, m };
+}
+function showBeatResult() {
+  const last = LOG.beatTests.at(-1)?.runId;
+  const ts = LOG.beatTests.filter((t) => t.runId === last);
+  if (!ts.length) { $("beat-result").innerHTML = ""; return; }
+  const { rows, m } = beatConfusion(ts);
+  const ok = ts.filter((t) => t.ok).length;
+  $("beat-result").innerHTML = `<div class="stat">最新（${ts[0].mode === "seq" ? "4拍" : "1つずつ"}、1拍${ts[0].beatMs}ms、窓の中心 ${fmtOff(ts[0].offset)}）：正解 <b>${ok}/${ts.length}</b></div>` +
+    `<div class="scroll"><table><tr><th>読み上げ</th><th>正解</th><th style="text-align:left">判定（回数）</th></tr>` +
+    rows.map((r) => { const xs = ts.filter((t) => t.label === r); return `<tr><th>${itemName(ITEM[r])}</th><td>${xs.filter((t) => t.ok).length}/${xs.length}</td><td style="text-align:left">${Object.entries(m[r]).map(([a, n]) => `<span style="color:${isOk(ITEM[r], a) ? "#5fd18a" : "#e8664f"}">${actShort(a)}${n}</span>`).join(" ")}</td></tr>`; }).join("") +
+    "</table></div>";
+}
+showBeatResult();
+// 要約（段階2の部分）
+function summaryStage2(L) {
+  const runs = [...new Set(LOG.beatTests.map((t) => t.runId))];
+  for (const mode of ["single", "seq"]) {
+    const myRuns = runs.filter((r) => LOG.beatTests.find((t) => t.runId === r)?.mode === mode).slice(-3);
+    if (!myRuns.length) continue;
+    L.push(`## 段階2 ${mode === "single" ? "1つずつ" : "4拍続けて"}（最新${myRuns.length}回分）`);
+    for (const rid of myRuns) {
+      const ts = LOG.beatTests.filter((t) => t.runId === rid);
+      const t0 = ts[0];
+      L.push(`### ${new Date(t0.at).toLocaleTimeString()} 1拍${t0.beatMs}ms 窓の中心${fmtOff(t0.offset)} 構え${KAMAE_NAME[t0.kamae]}: 正解 ${ts.filter((t) => t.ok).length}/${ts.length}`);
+      const { rows, m } = beatConfusion(ts);
+      for (const r of rows) {
+        const xs = ts.filter((t) => t.label === r);
+        L.push(`  ${itemName(ITEM[r])}: ${xs.filter((t) => t.ok).length}/${xs.length}　判定 ${Object.entries(m[r]).map(([a, n]) => `${actShort(a)}${n}`).join(" ")}`);
+      }
+      const ruleCnt = {}; for (const t of ts) ruleCnt[t.rule] = (ruleCnt[t.rule] || 0) + 1;
+      L.push(`  規則ごと: ${Object.entries(ruleCnt).map(([k, v]) => `${k} ${v}`).join("、")}　前の拍から続いている ${ts.filter((t) => t.cont).length}　基準 ${Object.entries(ts.reduce((o, t) => ((o[t.anchorSrc] = (o[t.anchorSrc] || 0) + 1), o), {})).map(([k, v]) => `${k}${v}`).join(" ")}`);
+      const sw = ts.filter((t) => t.swing);
+      if (sw.length) L.push(`  振りの速さの山の、窓の中心からのずれ: 中央${median(sw.map((t) => t.swing.offsetInWin))}ms（10%点${q(sw.map((t) => t.swing.offsetInWin), 0.1)} / 90%点${q(sw.map((t) => t.swing.offsetInWin), 0.9)}）`);
+      for (const t of ts.filter((x) => !x.ok)) {
+        const s = t.swing;
+        const top = Object.entries(t.defDur).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${actShort(k)}${v}`).join(" ");
+        L.push(`  × ${mode === "seq" ? `${t.seqId + 1}-${t.pos + 1} ` : ""}${itemName(ITEM[t.label])}→${actShort(t.act)}［${t.rule}］${s ? ` 振り 向き(${s.dir.join(",")}) 角度${s.angle}° 始めの手${s.startX} 速さ${s.peak} 幅${s.amp}` : ""} 防御ms ${top || "-"} 最大 沈み${t.peak.drop} 腰${t.peak.dHip} 下がり${t.peak.dBack} 上体${t.peak.leanX} 画面外${Math.round(t.missFrac * 100)}%`);
+      }
+      if (mode === "seq") {
+        const seqs = [...new Set(ts.map((t) => t.seqId))];
+        for (const sid of seqs) { const xs = ts.filter((t) => t.seqId === sid).sort((a, b) => a.pos - b.pos); L.push(`  並び${sid + 1}: ${xs.map((t) => actShort(t.expect === "tsuki" ? "tsukiR" : t.label === "kamae" ? "kamae" : t.label)).join("・")} → ${xs.map((t) => `${t.ok ? "" : "×"}${actShort(t.act)}`).join("・")}`); }
+        L.push(`  拍の位置ごとの正解: ${[0, 1, 2, 3].map((p) => { const xs = ts.filter((t) => t.pos === p); return `${p + 1}拍目 ${xs.filter((t) => t.ok).length}/${xs.length}`; }).join("　")}`);
+      }
+    }
+    L.push("");
+  }
+  const fr = LOG.freeSwings.filter((x) => x.runId === LOG.freeSwings.at(-1)?.runId);
+  if (fr.length) {
+    L.push(`## 試し振り（最新${fr.length}本）`);
+    L.push(fr.slice(-30).map((x) => `${actShort(x.act)}(${x.angle}°,手${x.startX},${x.peak})`).join(" "));
+    L.push("");
+  }
+}
 
 // =====================================================================
 // 準備の状態・記録
@@ -932,7 +1290,7 @@ showPrep();
 function summary() {
   const L = [];
   const fpsAll = LOG.perf.filter((p) => p.body).map((p) => p.poseFps);
-  L.push(`# 拍の決闘ラボ 段階1 要約（版 ${VERSION}、${new Date().toLocaleString()}）`);
+  L.push(`# 拍の決闘ラボ 段階1〜2 要約（版 ${VERSION}、${new Date().toLocaleString()}）`);
   L.push(`端末: ${navigator.userAgent.match(/\(([^)]+)\)/)?.[1] || navigator.userAgent}　骨格FPS 中央${median(fpsAll) ?? "-"}（10%点${q(fpsAll, 0.1) ?? "-"}）`);
   L.push("");
   L.push("## 構えの登録（平均±ばらつき。手の横+＝自分の右、手の高さ+＝肩より下、胴の長さ比）");
@@ -966,11 +1324,7 @@ function summary() {
   }
   L.push(`今の調整値: ${CFG.beatMsChoices.map((ms) => `${ms}ms→${TIMING.byBeat[ms]?.offsetMs ?? "未"}`).join("　")}`);
   L.push("");
-  const aruns = [...new Set(LOG.anchorTests.map((t) => t.runId))];
-  L.push(`## 構え直し（最新の${aruns.length ? 1 : 0}回分）`);
-  for (const t of LOG.anchorTests.filter((x) => x.runId === aruns.at(-1))) {
-    L.push(`${t.i + 1}: 動いていた${t.moving ? "はい" : "いいえ"}(${t.sdX}) 構えの一致${Math.round(t.inKamae * 100)}% 直後0.5秒 腰${t.first500.hipShift} 沈み${t.first500.drop} 下がり${t.first500.back} 上体${t.first500.leanX}　5秒で出たもの ${Object.entries(t.seen).map(([k, v]) => `${DEF_NAME[k] || k}${v}`).join(" ")}`);
-  }
+  summaryStage2(L);
   return L.join("\n");
 }
 function refreshSummary() { $("summary").value = summary(); }
@@ -989,14 +1343,14 @@ $("btn-dl-json").onclick = () => {
 };
 $("btn-clear").onclick = () => {
   if (!confirm("記録を全部消します（登録した構えと調整値は残ります）。先にJSONを保存しましたか？")) return;
-  LOG = newLog(); saveLogNow(); refreshSummary(); showCheck(); showTiming(); showAnchor();
+  LOG = newLog(); saveLogNow(); refreshSummary(); showCheck(); showTiming(); showBeatResult();
 };
 
 // ---------- タブ ----------
 document.querySelectorAll("nav button[data-tab]").forEach((b) => {
   b.onclick = () => {
     document.querySelectorAll("nav button[data-tab]").forEach((x) => x.classList.toggle("on", x === b));
-    for (const id of ["prep", "kamae", "timing", "anchor", "log"]) $("p-" + id).hidden = id !== b.dataset.tab;
+    for (const id of ["prep", "kamae", "timing", "beat", "log"]) $("p-" + id).hidden = id !== b.dataset.tab;
     if (b.dataset.tab === "log") refreshSummary();
   };
 });

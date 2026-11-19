@@ -233,7 +233,7 @@
 // 拍の決闘ラボ（使い捨ての実験）。本編（suburi-bugeicho）のファイルは読み込まない。
 // 骨格推定・指標・素振りの検出は、同じフォルダの回避判定ラボ（index.html v4）から写したもの。
 const $ = (id) => document.getElementById(id);
-const VERSION = "duel-3o 2026-11-19";
+const VERSION = "duel-3p 2026-11-19";
 const VISION = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
@@ -1062,7 +1062,10 @@ function labelSwings(swings, frames, L = 1000) {
     if (x.role || x.dir[1] > 0.3 || fwd(x)) continue; // 突き（前へ）は、構えの近くで終わっても攻撃
     const fe = frames.find((f) => f[0] >= x.end);
     // 構えの見分け（kamaeMaxDist）より厳しく：横で終わる胴を戻りと取らないため（PCの確かめで胴が消えた）
-    if (fe && kamaeDist(frameObj(fe), selT) <= (J.returnKamaeDist ?? 1.5)) x.role = "return";
+    // 上向きは頭の上で終わる逆風・斬り上げと大きく離れるので緩め（returnKamaeDistUp）、横向きは体の横で終わる胴と近いので厳しめ
+    // （型の実機 duel-3o：強い真向のあと刀を上げて戻る動きが、構えより少し上で止まり、1.5では戻りにならなかった）
+    const lim = x.dir[1] < -0.3 ? (J.returnKamaeDistUp ?? 2.5) : (J.returnKamaeDist ?? 1.5);
+    if (fe && kamaeDist(frameObj(fe), selT) <= lim) x.role = "return";
   }
   for (const x of s) x.role ||= "attack";
   return s;
@@ -1218,6 +1221,8 @@ function judgeBeat({ frames, labeled, ws, we, anc, used, refT = null }) {
   // 刀立ては構えと形が近い（両手の縦の差だけが違う人もいる）ので、構えの方が長く続いた拍では刀立てにしない（実機 duel-2c で構え→刀立て 1回）
   // 体が動いた拍は、刀立てより体の動きを答えにする（ステップや下がりの間、手が刀立ての形に見えることがある：実機 duel-3b）
   const best = body || DEF_IDS.filter((k) => D.dur[k] >= th.holdMs && !(k === "tachi" && D.dur.kamae >= D.dur.tachi)).sort((a, b) => D.dur[b] - D.dur[a])[0];
+  // 前の拍の姿勢（しゃがみ・刀立てなど）が続いているだけで、構えの方が長い拍は、構えに戻る途中とみなす（型の実機：しゃがみ→構え がしゃがみ157ms で外れた）
+  if (best && D.cont[best] && D.dur.kamae > D.dur[best]) return { ...out, act: "kamae", rule: "4c 前の拍の姿勢から構えに戻る途中", cont: true };
   if (best) return { ...out, act: best, rule: "3 防御", cont: !!D.cont[best] };
   // 4. 登録した構え
   if (D.dur.kamae >= th.holdMs) return { ...out, act: "kamae", rule: "4 構え" };

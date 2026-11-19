@@ -12,12 +12,13 @@ export default {
     reanchorMs: 1000,      // 毎ターンの入力の前の「構え直し」の長さ
     reanchorMoveMax: 0.05, // 構え直しの間に、肩の横の揺れ（胴の長さ比）がこれより大きければ「動いていた」と記録する
     timingSwings: 8,       // タイミング調整で振る回数
+    timingWin: [-0.4, 0.9], // タイミング調整：ドンの何拍前〜何拍後の振りを、そのドンの振りとみなすか
     offscreenFrac: 0.5,    // 1拍の窓のうち、骨格が取れない時間がこれ以上なら棒立ち（段階2で使う）
     // 回避の閾値（前回の回避判定ラボ v4 の値。胴の長さ＝肩の中点〜腰の中点を1とする）
     th: {
       crouch: 0.35,  // しゃがみ：肩の中点の沈み
       step: 0.3,     // ステップ：腰の中点の横ずれ
-      leanX: 0.15,   // 上体を左右へ倒す（かがみ左右の候補・仮）
+      leanX: 0.15,   // かがみ左右：足は動かさず上体を左右へ倒す（肩の中点が腰の中点より横に出た量）。腰が動けばステップ
       sway: 0.08,    // 上体の前後 m（仮）
       back: 0.05,    // 下がり：胴と脚の見かけの縮み
       holdMs: 150,   // 続いた時間
@@ -88,6 +89,7 @@ export default {
       hidaka:  { name: "火鷹", kamae: "jodan", mix: { attack: 65, defense: 25, kamae: 10 }, likes: ["makko", "kesaR", "kesaL", "stepL", "stepR"] },
       seisai:  { name: "静斎", kamae: "hasso", mix: { attack: 35, defense: 40, kamae: 25 }, likes: ["kiriageR", "kiriageL", "gyakufu", "crouch", "stepL", "stepR"] },
       // 写し身：基本の割合は指示書に無いので仮の値（段階4で確認する）
+      // 突きの右寄り／左寄り＝突く前に手を引いた位置が、プレイヤーの体のどちら側か（段階2で判定する）
       utsushimi: { name: "写し身", kamae: "chudan", mix: { attack: 50, defense: 35, kamae: 15 }, likes: [], mirror: true },
     },
   },

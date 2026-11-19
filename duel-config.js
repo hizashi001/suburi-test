@@ -51,6 +51,13 @@ export default {
     kamaeBonus: 5,
   },
 
+  // シンプルなルール（攻撃・防御・構えの3つ。どの攻撃・どの防御でも同じ扱い。構えの種類の補正・相性表・太刀筋は使わない）
+  simple: {
+    clash: 10,        // 攻撃 対 攻撃：お互いに
+    kamaeHit: 20,     // 攻撃 対 構え（棒立ちを含む）：受けた側に
+    defenseBonus: 5,  // 攻撃 対 防御：防御は必ず成功、防いだ側の次の攻撃に +5
+  },
+
   // 構え。bonus は、その構えで +5 になる攻撃
   kamae: {
     jodan: { name: "上段", bonus: ["makko", "kesaR", "kesaL"] },

@@ -197,6 +197,12 @@
   </div>
   <div class="mut">1ターン＝「カッ×4」で数えて、「ドン×4」の各拍で1つ動く → 結果の演出。最大7ターン、時間切れは残りHPで判定。開始のあとは全部自動で進みます。試合で使う構えは「構え」タブで選んだもの。相手は4拍をターンの初めに決めます（あなたの入力は見ません）。</div>
   <div class="row">
+    <button class="b main" id="btn-kata">自分の型（相手なし）</button>
+    <label>回数</label><input type="number" id="num-kata" value="5" min="1" max="20" style="width:4em">
+  </div>
+  <div class="row" id="kata-sel"></div>
+  <div class="mut">自分で決めた4拍を、同じ並びで繰り返します。正しい答えが分かっているので、覚えておかなくても正解率と、間違えた拍の値が記録に残ります。違った拍だけ「2拍目、突き」のように言います。</div>
+  <div class="row">
     <button class="b" id="btn-free4">自由4拍（相手なし）</button>
     <label>回数</label><input type="number" id="num-free4" value="5" min="1" max="20" style="width:4em">
   </div>
@@ -219,7 +225,7 @@
 // 拍の決闘ラボ（使い捨ての実験）。本編（suburi-bugeicho）のファイルは読み込まない。
 // 骨格推定・指標・素振りの検出は、同じフォルダの回避判定ラボ（index.html v4）から写したもの。
 const $ = (id) => document.getElementById(id);
-const VERSION = "duel-3a 2026-11-19";
+const VERSION = "duel-3b 2026-11-19";
 const VISION = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
@@ -1081,7 +1087,10 @@ function judgeBeat({ frames, labeled, ws, we, anc, used }) {
     const a = classifyAttack(sw, frames);
     out.swing = { peak: sw.peak, amp: sw.amp, dir: sw.dir, onset: sw.onset, peakT: sw.peakT, offsetInWin: Math.round(sw.peakT - (ws + we) / 2), ...a, n: atks.length };
     // 例外：同じ拍で下がりが出ていて、振りが上向き（振りかぶり）なら下がり
-    if (D.dur.back >= th.holdMs && a.vert === "up") return { ...out, act: "back", rule: "2例外 下がり＋振りかぶり" };
+    // 振ると胴が前後に傾いて見かけが縮み、下がりが少し出てしまう（実機 duel-2c の4拍で、斬り上げ・突きが下がりになった：下がり199〜239ms）。
+    // なので例外は、下がりがはっきり出たときだけ（続いた時間 exceptBackMs 以上、縮み exceptBackMin 以上）
+    const EB = J.exceptBack || { ms: 300, min: 0.08 };
+    if (D.dur.back >= EB.ms && D.peak.dBack >= EB.min && a.vert === "up") return { ...out, act: "back", rule: "2例外 下がり＋振りかぶり" };
     return { ...out, act: a.id, rule: "2 素振り" };
   }
   // 3. 防御が150ms以上 → 続いた時間が一番長いもの
@@ -1552,29 +1561,56 @@ async function inputTurn(L, off, label) {
 }
 
 // ---------- 自由4拍（相手なし）：判定した4つを読み上げる ----------
-async function runFree4() {
+// 間違えた拍の値（要約用）
+function beatDetail(t) {
+  const sw = t.swing;
+  const top = Object.entries(t.defDur || {}).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${actShort(k)}${v}`).join(" ");
+  return `［${t.rule}］${sw ? ` 振り 向き(${sw.dir.join(",")}) 角度${sw.angle}° 始めの手${sw.startX} 速さ${sw.peak} 幅${sw.amp} 窓の中心から${sw.offsetInWin}ms` : ""} 防御ms ${top || "-"}${t.peak ? ` 最大 沈み${t.peak.drop} 腰${t.peak.dHip} 下がり${t.peak.dBack} 上体${t.peak.leanX}` : ""} 画面外${Math.round((t.missFrac || 0) * 100)}%`;
+}
+// 自由4拍（pattern なし）／自分の型（pattern＝4つの行動）
+async function runFree4(pattern = null) {
   if (!beatReady()) return;
-  const L = +$("sel-beat3").value, off = beatOffset(L), n = Math.max(1, +$("num-free4").value || 5);
+  const L = +$("sel-beat3").value, off = beatOffset(L), n = Math.max(1, +$(pattern ? "num-kata" : "num-free4").value || 5);
   const runId = runIdOf(LOG.free4);
+  const pname = (id) => (id === "kamae" ? KAMAE_NAME[selKamae()] : shortName(id));
   beginRun();
   try {
-    await say(`自由4拍。${n}回です。ドンの4拍で、好きな動きをしてください`);
+    if (pattern) await say(`自分の型。${n}回です。${pattern.map((id) => pname(id).replace("・", "")).join("、")}`);
+    else await say(`自由4拍。${n}回です。ドンの4拍で、好きな動きをしてください`);
     for (let i = 0; i < n; i++) {
-      $("big").textContent = ""; $("sub").textContent = "";
+      $("big").textContent = ""; $("sub").textContent = pattern ? pattern.map(pname).join(" → ") : "";
       const t = await inputTurn(L, off, `${i + 1}回目`);
       const acts = t.res.map((r) => r.act);
-      LOG.free4.push({ runId, i, at: iso(t.beats[0]), beatMs: L, offset: off, anchorSrc: t.an.src, kamae: selKamae(), acts, live: t.live, beats: t.res, fps: shown.poseFps });
+      const oks = pattern ? acts.map((a, k) => gameAct(a) === pattern[k]) : null;
+      LOG.free4.push({ runId, i, at: iso(t.beats[0]), beatMs: L, offset: off, anchorSrc: t.an.src, kamae: selKamae(), pattern, oks, acts, live: t.live, beats: t.res, fps: shown.poseFps });
       saveLogSoon();
-      $("big").textContent = acts.map((a) => shortName(gameAct(a))).join("・"); $("big").style.color = "#fff";
-      $("sub").textContent = t.live.some((a, k) => a !== acts[k]) ? `（拍の途中の表示：${t.live.map((a) => shortName(gameAct(a))).join("・")}）` : "";
-      await say(acts.map((a) => shortName(gameAct(a)).replace("・", "")).join("、"));
-      await wait(1500);
+      $("big").textContent = pattern ? `${oks.filter(Boolean).length} / 4` : acts.map((a) => shortName(gameAct(a))).join("・"); $("big").style.color = "#fff";
+      $("sub").textContent = pattern ? acts.map((a, k) => `${oks[k] ? "○" : "×"}${shortName(gameAct(a))}`).join("  ") : t.live.some((a, k) => a !== acts[k]) ? `（拍の途中の表示：${t.live.map((a) => shortName(gameAct(a))).join("・")}）` : "";
+      if (pattern) { const wrong = acts.map((a, k) => (oks[k] ? null : `${k + 1}拍目、${shortName(gameAct(a)).replace("・", "")}`)).filter(Boolean); await say(wrong.length ? wrong.join("。") : "全部正解"); }
+      else await say(acts.map((a) => shortName(gameAct(a)).replace("・", "")).join("、"));
+      await wait(1200);
     }
-    await say("自由4拍を終わります");
+    await say(pattern ? "型を終わります" : "自由4拍を終わります");
   } catch (e) { if (e !== STOP) throw e; }
   finally { endRun(); showDuelResult(); }
 }
-$("btn-free4").onclick = runFree4;
+// 型の4つを選ぶ（前回の選択を覚えておく）
+const KATA_KEY = "duellab.kata.v1";
+const kataOpts = [...ATK_IDS, ...DEF_IDS, "kamae"];
+{
+  const saved = lsGet(KATA_KEY) || ["makko", "back", "doR", "kamae"];
+  for (let k = 0; k < 4; k++) {
+    const sel = document.createElement("select"); sel.id = `kata-${k}`;
+    for (const id of kataOpts) { const o = document.createElement("option"); o.value = id; o.textContent = id === "kamae" ? "構え" : shortName(id); sel.append(o); }
+    sel.value = saved[k] || "kamae";
+    sel.onchange = () => lsSet(KATA_KEY, [0, 1, 2, 3].map((j) => $(`kata-${j}`).value));
+    const lab = document.createElement("label"); lab.textContent = `${k + 1}`;
+    $("kata-sel").append(lab, sel);
+  }
+}
+$("btn-kata").onclick = () => runFree4([0, 1, 2, 3].map((k) => $(`kata-${k}`).value));
+$("btn-free4").onclick = () => runFree4(null);
+
 
 // ---------- 決闘 ----------
 async function runDuel() {
@@ -1670,11 +1706,23 @@ function summaryStage3(L) {
     }
     L.push("");
   }
-  const fr = LOG.free4.filter((x) => x.runId === LOG.free4.at(-1)?.runId);
-  if (fr.length) {
-    L.push(`## 自由4拍（最新${fr.length}回、1拍${fr[0].beatMs}ms）`);
-    for (const x of fr) L.push(`  ${x.i + 1}: ${x.acts.map((a) => shortName(gameAct(a)) + (a === "kamaeX" ? "?" : "")).join("・")}${x.live.some((a, k) => a !== x.acts[k]) ? `（途中の表示 ${x.live.map((a) => shortName(gameAct(a))).join("・")}）` : ""}`);
-    L.push("  ※?＝判定できず構え扱い。合っていたかは、ヒデキの記憶と照らしてください");
+  const runs4 = [...new Set(LOG.free4.map((x) => x.runId))].slice(-3);
+  for (const rid of runs4) {
+    const fr = LOG.free4.filter((x) => x.runId === rid);
+    const pat = fr[0].pattern;
+    if (pat) {
+      const all = fr.flatMap((x) => x.oks);
+      L.push(`## 自分の型（${new Date(fr[0].at).toLocaleTimeString()}、1拍${fr[0].beatMs}ms、${fr.length}回）: ${pat.map(shortName).join("・")}　正解 ${all.filter(Boolean).length}/${all.length}`);
+      L.push(`  拍ごと: ${pat.map((id, k) => `${k + 1}拍目 ${fr.filter((x) => x.oks[k]).length}/${fr.length}`).join("　")}`);
+      for (const x of fr) L.push(`  ${x.i + 1}: ${x.acts.map((a, k) => `${x.oks[k] ? "" : "×"}${shortName(gameAct(a))}${a === "kamaeX" ? "?" : ""}`).join("・")}`);
+      for (const x of fr) x.acts.forEach((a, k) => { if (!x.oks[k]) L.push(`  × ${x.i + 1}-${k + 1} ${shortName(pat[k])}→${shortName(gameAct(a))} ${beatDetail(x.beats[k])}`); });
+    } else {
+      L.push(`## 自由4拍（${new Date(fr[0].at).toLocaleTimeString()}、1拍${fr[0].beatMs}ms、${fr.length}回）`);
+      for (const x of fr) {
+        L.push(`  ${x.i + 1}: ${x.acts.map((a) => shortName(gameAct(a)) + (a === "kamaeX" ? "?" : "")).join("・")}${x.live.some((a, k) => a !== x.acts[k]) ? `（途中の表示 ${x.live.map((a) => shortName(gameAct(a))).join("・")}）` : ""}`);
+        x.beats.forEach((t, k) => L.push(`    ${k + 1}拍目 ${shortName(gameAct(t.act))} ${beatDetail(t)}`));
+      }
+    }
     L.push("");
   }
 }

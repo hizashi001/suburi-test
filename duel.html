@@ -44,6 +44,23 @@
   .scroll { overflow:auto; max-width:100%; }
   .stat { font-size:13px; line-height:1.6; }
   .stat b { color:var(--acc); font-weight:normal; }
+  /* 段階3：決闘の画面（上：相手、下：自分）と結果の演出 */
+  #duel-hud { position:absolute; inset:0; pointer-events:none; z-index:3; }
+  #dh-top { position:absolute; left:0; right:0; top:0; padding:8px 12px 18px; background:linear-gradient(#000d,#0000); font-size:16px; }
+  #dh-bottom { position:absolute; left:0; right:0; bottom:0; padding:18px 12px 10px; background:linear-gradient(#0000,#000d); font-size:16px; }
+  .hb { display:flex; align-items:center; gap:6px; margin-top:4px; font-size:13px; }
+  .hb .bar { flex:1; height:12px; background:#333; border-radius:6px; overflow:hidden; }
+  .hb .bar i { display:block; height:100%; background:#5fd18a; transition:width .3s; }
+  .hb .bar.sp i { background:#7cc7ff; }
+  .hb b { width:2.2em; text-align:right; font-weight:normal; }
+  #dh-tend { font-size:13px; color:#ccc; margin-top:4px; }
+  #arena { position:absolute; inset:0; width:100%; height:100%; display:none; z-index:2; }
+  body.arena #arena { display:block; }
+  body.duel #hud { display:none; }
+  body.duel #big { bottom:120px; }
+  body.duel #sub { bottom:96px; }
+  body.duel #cue { top:30%; }
+  body.duel #btn-stop { bottom:auto; top:110px; }
   [hidden] { display:none !important; }
 </style>
 </head>
@@ -53,6 +70,7 @@
   <button data-tab="kamae">構え</button>
   <button data-tab="timing">拍の調整</button>
   <button data-tab="beat">判定</button>
+  <button data-tab="duel">決闘</button>
   <button data-tab="log">記録</button>
   <span id="ver">版 読込中</span>
 </nav>
@@ -65,6 +83,18 @@
   <div id="big"></div>
   <div id="sub"></div>
   <div id="msg">下の「カメラ開始」を押してください</div>
+  <canvas id="arena"></canvas>
+  <div id="duel-hud" hidden>
+    <div id="dh-top">
+      <div id="dh-npc"></div>
+      <div class="hb">HP<span class="bar"><i id="dh-nhp"></i></span><b id="dh-nhpv"></b>　SP<span class="bar sp"><i id="dh-nsp"></i></span><b id="dh-nspv"></b></div>
+      <div id="dh-tend"></div>
+    </div>
+    <div id="dh-bottom">
+      <div id="dh-me"></div>
+      <div class="hb">HP<span class="bar"><i id="dh-php"></i></span><b id="dh-phpv"></b>　SP<span class="bar sp"><i id="dh-psp"></i></span><b id="dh-pspv"></b></div>
+    </div>
+  </div>
   <button id="btn-stop">止める</button>
 </div>
 
@@ -85,7 +115,7 @@
       <select id="sel-model"><option value="lite" selected>lite</option><option value="full">full</option></select>
     </div>
   </details>
-  <div class="mut">拍の決闘ラボ（使い捨ての実験）。段階1：構えの登録・拍のタイミング調整／段階2：1拍の判定テスト。
+  <div class="mut">拍の決闘ラボ（使い捨ての実験）。段階1：構えの登録・拍のタイミング調整／段階2：1拍の判定テスト／段階3：4拍の決闘（鉄心）と自由4拍。
     スマホは縦置き、カメラから2〜3m離れて全身が映る位置で。開始のボタンを押したあとは音声で進みます。左下の「止める」でいつでも止まります。</div>
 </div>
 
@@ -156,6 +186,24 @@
   <div id="beat-result"></div>
 </div>
 
+<!-- 決闘（段階3） -->
+<div class="panel" id="p-duel" hidden>
+  <div class="row">
+    <label>相手</label><select id="sel-npc"></select>
+    <label>1拍</label><select id="sel-beat3"></select>
+  </div>
+  <div class="row">
+    <button class="b main" id="btn-duel">決闘開始</button>
+  </div>
+  <div class="mut">1ターン＝「カッ×4」で数えて、「ドン×4」の各拍で1つ動く → 結果の演出。最大7ターン、時間切れは残りHPで判定。開始のあとは全部自動で進みます。試合で使う構えは「構え」タブで選んだもの。相手は4拍をターンの初めに決めます（あなたの入力は見ません）。</div>
+  <div class="row">
+    <button class="b" id="btn-free4">自由4拍（相手なし）</button>
+    <label>回数</label><input type="number" id="num-free4" value="5" min="1" max="20" style="width:4em">
+  </div>
+  <div class="mut">指示なし。ドン4つの間に好きな動きをすると、判定した4つを読み上げます。</div>
+  <div id="duel-result"></div>
+</div>
+
 <!-- 記録 -->
 <div class="panel" id="p-log" hidden>
   <div class="row">
@@ -171,7 +219,7 @@
 // 拍の決闘ラボ（使い捨ての実験）。本編（suburi-bugeicho）のファイルは読み込まない。
 // 骨格推定・指標・素振りの検出は、同じフォルダの回避判定ラボ（index.html v4）から写したもの。
 const $ = (id) => document.getElementById(id);
-const VERSION = "duel-2d 2026-11-19";
+const VERSION = "duel-3a 2026-11-19";
 const VISION = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
@@ -197,6 +245,8 @@ function newLog() {
     anchorTests: [],  // 構え直しの1回ずつ（duel-1。段階2でやめた）
     beatTests: [],    // 段階2：1拍の判定の1つずつ
     freeSwings: [],   // 段階2：試し振り
+    matches: [],      // 段階3：決闘（ターン・拍ごと）
+    free4: [],        // 段階3：自由4拍
   };
 }
 const idb = {
@@ -218,7 +268,7 @@ const within = (p, ms, v) => Promise.race([p, new Promise((r) => setTimeout(() =
 const useIdb = await within(idb.open(), 2000, false);
 let LOG = useIdb ? await within(idb.get(LOG_KEY), 3000, undefined) : lsGet(LOG_KEY);
 LOG ||= newLog();
-for (const k of ["sessions", "events", "perf", "kamaeRegs", "kamaeChecks", "timingRuns", "anchorTests", "beatTests", "freeSwings"]) LOG[k] ||= [];
+for (const k of ["sessions", "events", "perf", "kamaeRegs", "kamaeChecks", "timingRuns", "anchorTests", "beatTests", "freeSwings", "matches", "free4"]) LOG[k] ||= [];
 $("ver").textContent = `版 ${VERSION}`;
 const T0 = performance.now(), T0wall = Date.now();
 const now = () => performance.now();
@@ -1277,6 +1327,359 @@ function summaryStage2(L) {
 }
 
 // =====================================================================
+// 段階3：4拍の決闘（相手：鉄心、1拍1.2秒）と、自由4拍（相手なし）
+// =====================================================================
+const R = CFG.rules, NPCS = CFG.npc.list;
+// 相性表（設定ファイルの文字の表 → TABLE[攻撃][防御] = "優"|"良"|"可"|"不"）
+const TABLE = (() => {
+  const t = {};
+  for (const [atk, row] of Object.entries(CFG.table.rows)) { const cells = row.trim().split(/\s+/); t[atk] = {}; CFG.table.cols.forEach((d, i) => (t[atk][d] = cells[i])); }
+  return t;
+})();
+const ATK_IDS = Object.keys(ATK_NAME);
+const gameAct = (judged) => (judged === "kamaeX" ? "kamae" : judged); // 判定できない拍は構え扱い
+const family = (id) => (ATK_NAME[id] ? ATK_NAME[id].split("・")[0] : DEFN[id] ? DEFN[id] : id === "kamae" ? "構え" : id === "open" ? "棒立ち" : id);
+const shortName = (id) => (ATK_NAME[id] || DEFN[id] || (id === "kamae" ? "構え" : id === "open" ? "棒立ち" : id));
+
+// ---------- 太刀筋のきれいさ（相打ちのときだけ使う。8章） ----------
+// 手首の軌道（肩の中点から見た3D）で ①一つの面に乗っているか ②速さ ③振り終わりで止まるか を 0〜1 にする
+function eig3(a) { // 対称3×3行列の固有値（小さい順）
+  const p1 = a[0][1] ** 2 + a[0][2] ** 2 + a[1][2] ** 2;
+  if (p1 < 1e-12) return [a[0][0], a[1][1], a[2][2]].sort((x, y) => x - y);
+  const q = (a[0][0] + a[1][1] + a[2][2]) / 3;
+  const p = Math.sqrt(((a[0][0] - q) ** 2 + (a[1][1] - q) ** 2 + (a[2][2] - q) ** 2 + 2 * p1) / 6);
+  const B = a.map((r, i) => r.map((v, j) => (v - (i === j ? q : 0)) / p));
+  const det = B[0][0] * (B[1][1] * B[2][2] - B[1][2] * B[2][1]) - B[0][1] * (B[1][0] * B[2][2] - B[1][2] * B[2][0]) + B[0][2] * (B[1][0] * B[2][1] - B[1][1] * B[2][0]);
+  const phi = Math.acos(Math.max(-1, Math.min(1, det / 2))) / 3;
+  const e1 = q + 2 * p * Math.cos(phi), e3 = q + 2 * p * Math.cos(phi + (2 * Math.PI) / 3);
+  return [e3, 3 * q - e1 - e3, e1];
+}
+function cleanScore(sw, frames) {
+  const C = J.clean || { planeW: 1, speedW: 1, stopW: 1, speedRef: 8, stopMs: 400 };
+  const ix = (k) => FIELDS.indexOf(k) + 1;
+  const pts = frames.filter((f) => f[0] >= sw.onset && f[0] <= sw.end).map((f) => [f[ix("r3x")], f[ix("r3y")], f[ix("r3z")]]);
+  if (pts.length < 4) return null;
+  const m = [0, 1, 2].map((d) => pts.reduce((s, p) => s + p[d], 0) / pts.length);
+  const cov = [0, 1, 2].map((i) => [0, 1, 2].map((j) => pts.reduce((s, p) => s + (p[i] - m[i]) * (p[j] - m[j]), 0) / pts.length));
+  const ev = eig3(cov), sum = ev[0] + ev[1] + ev[2] || 1;
+  const plane = Math.max(0, Math.min(1, 1 - (3 * Math.max(0, ev[0])) / sum));   // 1＝ぴったり一つの面
+  const speed = Math.max(0, Math.min(1, sw.peak / C.speedRef));                    // 速さの山 ÷ 基準
+  const stop = Math.max(0, Math.min(1, 1 - (sw.end - sw.peakT - 100) / C.stopMs)); // 山から止まるまでが短いほど1
+  const W = C.planeW + C.speedW + C.stopW || 1;
+  return { plane: +plane.toFixed(2), speed: +speed.toFixed(2), stop: +stop.toFixed(2), total: +((C.planeW * plane + C.speedW * speed + C.stopW * stop) / W).toFixed(3) };
+}
+
+// ---------- 1拍の決着 ----------
+// S＝{ name, hp, sp, bonus（次の攻撃+10）, kamae, league }
+function spCost(act) { return ATK_NAME[act] ? R.spCostAttack : DEFN[act] ? R.spCostDefense : 0; }
+function effAct(S, act) { // SPが足りない攻撃・防御は棒立ち（ビギナーは構え扱い）
+  const c = spCost(act);
+  if (c && S.sp < c) return { act: S.league === "beginner" ? "kamae" : "open", short: true };
+  return { act, short: false };
+}
+function resolveBeat(P, N, pAct, nAct, pClean, nClean) {
+  const pa = effAct(P, pAct), na = effAct(N, nAct);
+  const o = { pAct: pa.act, nAct: na.act, pShort: pa.short, nShort: na.short, dmgP: 0, dmgN: 0, healP: 0, healN: 0, label: "", grade: null, defender: null, cleanP: pClean, cleanN: nClean, clashWinner: null, bonusUsedP: 0, bonusUsedN: 0 };
+  // SPの出入り
+  for (const [S, a] of [[P, pa.act], [N, na.act]]) {
+    if (a === "kamae") S.sp = Math.min(R.spMax, S.sp + (S.kamae === "hasso" ? R.hassoRecover : R.kamaeRecover));
+    else S.sp -= spCost(a);
+  }
+  const isAtk = (a) => !!ATK_NAME[a];
+  const dmgOf = (S, atk, base) => (base > 0 ? base + (CFG.kamae[S.kamae].bonus.includes(atk) ? R.kamaeBonus : 0) + (S.bonus || 0) : 0);
+  if (isAtk(pa.act) && isAtk(na.act)) {
+    o.label = "相打ち";
+    o.dmgP = dmgOf(N, na.act, R.clashDamage); o.dmgN = dmgOf(P, pa.act, R.clashDamage);
+    const cp = pClean?.total ?? 0, cn = nClean?.total ?? 0;
+    if (cp > cn) { o.dmgN += R.cleanBonus; o.clashWinner = "P"; } else if (cn > cp) { o.dmgP += R.cleanBonus; o.clashWinner = "N"; }
+    o.bonusUsedP = P.bonus; o.bonusUsedN = N.bonus; P.bonus = 0; N.bonus = 0;
+  } else if (isAtk(pa.act) || isAtk(na.act)) {
+    const pAtk = isAtk(pa.act), A = pAtk ? P : N, D = pAtk ? N : P, atk = pAtk ? pa.act : na.act, dAct = pAtk ? na.act : pa.act;
+    o.defender = pAtk ? "N" : "P";
+    let dmg = 0;
+    const col = DEFN[dAct] ? dAct : dAct === "kamae" && D.kamae === "hasso" ? "tachi" : null; // 八相は構えの拍でも刀立て扱い
+    if (col) {
+      o.grade = TABLE[atk][col]; const g = R.grade[o.grade];
+      dmg = g.damage > 0 ? dmgOf(A, atk, g.damage) : 0;
+      if (g.heal) { const h = Math.min(R.hpMax - D.hp, g.heal); D.hp += h; if (pAtk) o.healN = h; else o.healP = h; }
+      if (g.nextAttack) D.bonus = g.nextAttack;
+      o.label = o.grade; if (col === "tachi" && dAct === "kamae") o.hasso = true;
+    } else { dmg = dmgOf(A, atk, R.openDamage); o.label = "無防備"; }
+    if (pAtk) { o.dmgN = dmg; o.bonusUsedP = P.bonus; } else { o.dmgP = dmg; o.bonusUsedN = N.bonus; }
+    A.bonus = 0; // 当たらなくても、攻撃した時点で消える
+  }
+  P.hp = Math.max(0, P.hp - o.dmgP); N.hp = Math.max(0, N.hp - o.dmgN);
+  o.after = { pHp: P.hp, pSp: P.sp, nHp: N.hp, nSp: N.sp, pBonus: P.bonus, nBonus: N.bonus };
+  return o;
+}
+
+// ---------- 相手（NPC）の4拍。プレイヤーの入力は見ずに、ターンの初めに4つ同時に決める ----------
+function pickW(w) { const tot = Object.values(w).reduce((a, b) => a + b, 0); if (tot <= 0) return null; let r = Math.random() * tot; for (const [k, v] of Object.entries(w)) { if ((r -= v) < 0) return k; } return Object.keys(w).at(-1); }
+function npcPlan(N, npc) {
+  const C = CFG.npc, acts = [];
+  let sp = N.sp;
+  const like = (id) => (npc.likes.includes(id) ? C.likeWeight : 1);
+  for (let k = 0; k < R.beatsPerTurn; k++) {
+    const w = { ...npc.mix };
+    if (sp < C.lowSp) w.kamae *= C.lowSpKamaeMul;
+    if (N.hp < C.lowHp) w.defense *= C.lowHpDefenseMul;
+    if (sp < R.spCostAttack) w.attack = 0;
+    if (sp < R.spCostDefense) w.defense = 0;
+    const cat = pickW(w) || "kamae";
+    const a = cat === "attack" ? pickW(Object.fromEntries(ATK_IDS.map((id) => [id, like(id)]))) : cat === "defense" ? pickW(Object.fromEntries(DEF_IDS.map((id) => [id, like(id)]))) : "kamae";
+    acts.push(a);
+    sp = a === "kamae" ? Math.min(R.spMax, sp + (N.kamae === "hasso" ? R.hassoRecover : R.kamaeRecover)) : sp - spCost(a);
+  }
+  return acts;
+}
+// 相手の傾向（上位3つの行動の割合）。試合で出した行動があればそれ、なければ設定の重みからの予想
+function tendency(npc, done) {
+  let p = {};
+  if (done.length) { for (const a of done) p[family(a)] = (p[family(a)] || 0) + 1 / done.length; }
+  else {
+    const like = (id) => (npc.likes.includes(id) ? CFG.npc.likeWeight : 1), tot = npc.mix.attack + npc.mix.defense + npc.mix.kamae;
+    const add = (ids, share) => { const s = ids.reduce((a, id) => a + like(id), 0); for (const id of ids) p[family(id)] = (p[family(id)] || 0) + (share * like(id)) / s; };
+    add(ATK_IDS, npc.mix.attack / tot); add(DEF_IDS, npc.mix.defense / tot); p["構え"] = npc.mix.kamae / tot;
+  }
+  return { guess: !done.length, top: Object.entries(p).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, v]) => `${k} ${Math.round(v * 100)}%`) };
+}
+
+// ---------- 画面（上：相手、下：自分） ----------
+function hudShow(on) { $("duel-hud").hidden = !on; document.body.classList.toggle("duel", on); }
+function hudUpdate(P, N, npc, done) {
+  const bar = (id, v, max) => { $(id).style.width = `${Math.max(0, (v / max) * 100)}%`; };
+  $("dh-npc").textContent = `${npc.name}（${KAMAE_NAME[npc.kamae]}）${N.bonus ? "　次の攻撃+" + N.bonus : ""}`;
+  bar("dh-nhp", N.hp, R.hpMax); bar("dh-nsp", N.sp, R.spMax); $("dh-nhpv").textContent = N.hp; $("dh-nspv").textContent = N.sp;
+  const t = tendency(npc, done); $("dh-tend").textContent = `傾向${t.guess ? "（予想）" : ""}：${t.top.join("　")}`;
+  $("dh-me").textContent = `自分（${KAMAE_NAME[P.kamae]}）${P.bonus ? "　次の攻撃+" + P.bonus : ""}`;
+  bar("dh-php", P.hp, R.hpMax); bar("dh-psp", P.sp, R.spMax); $("dh-phpv").textContent = P.hp; $("dh-pspv").textContent = P.sp;
+}
+
+// ---------- 結果の演出：向かい合う2体が1拍ずつ動く（仮の影） ----------
+const arena = $("arena"), actx = arena.getContext("2d");
+function drawFigure(x, base, U, face, act, prog, hit, col) {
+  // face：+1＝右を向く（自分）、-1＝左を向く（相手）。prog：0→1
+  const e = (1 - Math.cos(Math.min(1, prog * 1.6) * Math.PI)) / 2;
+  let dx = 0, dy = 0, lean = 0, sw0 = -20, sw1 = -20, shade = col;
+  if (ATK_NAME[act]) {
+    if (/^tsuki/.test(act)) { dx = 0.35 * e; sw0 = sw1 = 0; }
+    else if (/^do/.test(act)) { sw0 = -10; sw1 = 10; dx = 0.15 * e; }
+    else if (/^(kiriage|gyakufu)/.test(act)) { sw0 = 60; sw1 = -80; }
+    else { sw0 = -100; sw1 = 30; }
+  } else if (act === "crouch") dy = 0.45 * e;
+  else if (act === "back") dx = -0.5 * e;
+  else if (act === "stepL" || act === "stepR") { dy = (act === "stepL" ? -0.18 : 0.18) * e; dx = -0.1 * e; }
+  else if (act === "kagamiL" || act === "kagamiR") lean = (act === "kagamiL" ? -25 : 25) * e;
+  else if (act === "tachi") { sw0 = sw1 = -90; }
+  else if (act === "open") { sw0 = sw1 = 60; shade = "#777"; }
+  const X = x + face * dx * U, Y = base + dy * U, ang = (sw0 + (sw1 - sw0) * e) * (Math.PI / 180);
+  actx.save(); actx.translate(X, Y); actx.rotate((lean * Math.PI) / 180 * face);
+  actx.strokeStyle = hit ? "#e8664f" : shade; actx.fillStyle = actx.strokeStyle; actx.lineWidth = U * 0.09; actx.lineCap = "round";
+  const hipY = -U * 0.9, shY = -U * 1.75;
+  actx.beginPath(); actx.moveTo(-U * 0.25, 0); actx.lineTo(0, hipY); actx.lineTo(U * 0.25, 0); actx.stroke(); // 脚
+  actx.beginPath(); actx.moveTo(0, hipY); actx.lineTo(0, shY); actx.stroke(); // 胴
+  actx.beginPath(); actx.arc(0, shY - U * 0.28, U * 0.22, 0, Math.PI * 2); actx.fill(); // 頭
+  const hx = face * U * 0.45, hy = shY + U * 0.35;
+  actx.beginPath(); actx.moveTo(0, shY + U * 0.05); actx.lineTo(hx, hy); actx.stroke(); // 腕
+  actx.strokeStyle = act === "open" ? "#666" : "#ddd"; actx.lineWidth = U * 0.05;
+  actx.beginPath(); actx.moveTo(hx, hy); actx.lineTo(hx + face * Math.cos(ang) * U * 1.3, hy + Math.sin(ang) * U * 1.3); actx.stroke(); // 刀
+  actx.restore();
+}
+function drawArena(st, prog) {
+  const dpr = devicePixelRatio || 1, W = Math.round(arena.clientWidth * dpr), H = Math.round(arena.clientHeight * dpr);
+  if (arena.width !== W || arena.height !== H) { arena.width = W; arena.height = H; }
+  actx.fillStyle = "#0b0b0b"; actx.fillRect(0, 0, W, H);
+  const U = Math.min(W * 0.15, H * 0.12), base = H * 0.72;
+  actx.strokeStyle = "#333"; actx.lineWidth = 2; actx.beginPath(); actx.moveTo(0, base + 2); actx.lineTo(W, base + 2); actx.stroke();
+  const hitP = st.o.dmgP > 0 && prog > 0.45, hitN = st.o.dmgN > 0 && prog > 0.45;
+  drawFigure(W * 0.3, base, U, 1, st.o.pAct, prog, hitP, "#5fd18a");
+  drawFigure(W * 0.7, base, U, -1, st.o.nAct, prog, hitN, "#f2c14e");
+  actx.textAlign = "center"; actx.fillStyle = "#fff";
+  actx.font = `bold ${Math.round(U * 0.32)}px -apple-system, sans-serif`;
+  actx.fillText(`${st.k + 1}拍目`, W / 2, H * 0.24);
+  actx.font = `${Math.round(U * 0.3)}px -apple-system, sans-serif`;
+  actx.fillStyle = "#5fd18a"; actx.fillText(shortName(st.o.pAct) + (st.o.pShort ? "（SP不足）" : ""), W * 0.3, base + U * 0.55);
+  actx.fillStyle = "#f2c14e"; actx.fillText(shortName(st.o.nAct) + (st.o.nShort ? "（SP不足）" : ""), W * 0.7, base + U * 0.55);
+  if (prog > 0.35 && st.o.label) {
+    actx.fillStyle = st.o.label === "相打ち" ? "#ff8f6b" : st.o.label === "無防備" ? "#e8664f" : "#7cc7ff";
+    actx.font = `bold ${Math.round(U * 0.75)}px -apple-system, sans-serif`;
+    actx.fillText(st.o.label, W / 2, H * 0.34);
+  }
+  if (prog > 0.45) {
+    actx.font = `bold ${Math.round(U * 0.45)}px -apple-system, sans-serif`;
+    if (st.o.dmgP) { actx.fillStyle = "#e8664f"; actx.fillText(`-${st.o.dmgP}`, W * 0.3, base - U * 2.55); }
+    if (st.o.dmgN) { actx.fillStyle = "#e8664f"; actx.fillText(`-${st.o.dmgN}`, W * 0.7, base - U * 2.55); }
+    if (st.o.healP) { actx.fillStyle = "#5fd18a"; actx.fillText(`+${st.o.healP}`, W * 0.3, base - U * 3.05); }
+    if (st.o.healN) { actx.fillStyle = "#5fd18a"; actx.fillText(`+${st.o.healN}`, W * 0.7, base - U * 3.05); }
+  }
+}
+async function playBeat(st, ms) {
+  const t0 = now();
+  while (now() - t0 < ms) { if (stopFlag) throw STOP; drawArena(st, (now() - t0) / ms); await new Promise((r) => requestAnimationFrame(r)); }
+  drawArena(st, 1);
+}
+// 1拍の結果を短く読み上げる（自分から見た言い方）
+function beatWords(o) {
+  if (o.label === "相打ち") return o.clashWinner === "P" ? "相打ち、勝ち" : o.clashWinner === "N" ? "相打ち、負け" : "相打ち";
+  if (o.label === "無防備") return o.defender === "P" ? `無防備、${o.dmgP}` : `命中、${o.dmgN}`;
+  if (o.grade) return o.defender === "P" ? o.grade : `相手、${o.grade}`;
+  return "";
+}
+
+// ---------- 入力の4拍（自由4拍と決闘で共通） ----------
+// カッ×4 で数えて、ドン×4 の各拍で1つ動く。拍ごとに、判定した行動を音と大きな文字で知らせる
+async function inputTurn(L, off, label) {
+  const an = autoAnchor(now());
+  const ts = scheduleDrums([0, 1, 2, 3].map((k) => ({ dt: k * L, big: false })).concat([4, 5, 6, 7].map((k) => ({ dt: k * L, big: true }))));
+  const beats = ts.slice(4), live = [];
+  for (let k = 0; k < 4; k++) { await waitUntil(ts[k] - 20); $("cue").textContent = label ? `${label}　${4 - k}` : `${4 - k}`; }
+  for (let k = 0; k < 4; k++) {
+    await waitUntil(beats[k] - 20); $("cue").textContent = `${k + 1}`;
+    if (k > 0) await judgeLive(k - 1);
+  }
+  await judgeLive(3);
+  async function judgeLive(j) {
+    await waitUntil(beats[j] + off.used + L / 2 + 450);
+    const { res } = judgeBeats(beats.slice(0, j + 1), L, off.used, an.anchor);
+    const r = res[j]; live[j] = r.act;
+    kindSound(ACT_KIND(r.act === "kamaeX" ? "kamae" : r.act));
+    $("big").textContent = actName(r.act).replace(/（.*）/, ""); $("big").style.color = "#fff";
+    $("sub").textContent = live.map((a) => shortName(gameAct(a))).join(" ・ ");
+  }
+  $("cue").textContent = "";
+  const fin = judgeBeats(beats, L, off.used, an.anchor);
+  return { beats, an, live, ...fin };
+}
+
+// ---------- 自由4拍（相手なし）：判定した4つを読み上げる ----------
+async function runFree4() {
+  if (!beatReady()) return;
+  const L = +$("sel-beat3").value, off = beatOffset(L), n = Math.max(1, +$("num-free4").value || 5);
+  const runId = runIdOf(LOG.free4);
+  beginRun();
+  try {
+    await say(`自由4拍。${n}回です。ドンの4拍で、好きな動きをしてください`);
+    for (let i = 0; i < n; i++) {
+      $("big").textContent = ""; $("sub").textContent = "";
+      const t = await inputTurn(L, off, `${i + 1}回目`);
+      const acts = t.res.map((r) => r.act);
+      LOG.free4.push({ runId, i, at: iso(t.beats[0]), beatMs: L, offset: off, anchorSrc: t.an.src, kamae: selKamae(), acts, live: t.live, beats: t.res, fps: shown.poseFps });
+      saveLogSoon();
+      $("big").textContent = acts.map((a) => shortName(gameAct(a))).join("・"); $("big").style.color = "#fff";
+      $("sub").textContent = t.live.some((a, k) => a !== acts[k]) ? `（拍の途中の表示：${t.live.map((a) => shortName(gameAct(a))).join("・")}）` : "";
+      await say(acts.map((a) => shortName(gameAct(a)).replace("・", "")).join("、"));
+      await wait(1500);
+    }
+    await say("自由4拍を終わります");
+  } catch (e) { if (e !== STOP) throw e; }
+  finally { endRun(); showDuelResult(); }
+}
+$("btn-free4").onclick = runFree4;
+
+// ---------- 決闘 ----------
+async function runDuel() {
+  if (!beatReady()) return;
+  const npcId = $("sel-npc").value, npc = NPCS[npcId];
+  const L = +$("sel-beat3").value, off = beatOffset(L);
+  const P = { name: "自分", hp: R.hpStart, sp: R.spStart, bonus: 0, kamae: selKamae(), league: "normal" };
+  const N = { name: npc.name, hp: R.hpStart, sp: R.spStart, bonus: 0, kamae: npc.kamae, league: "normal" };
+  const match = { id: runIdOf(LOG.matches), at: iso(), npc: npcId, npcName: npc.name, beatMs: L, offset: off, kamae: P.kamae, npcKamae: N.kamae, league: "normal", turns: [], version: VERSION };
+  match.runId = match.id;
+  LOG.matches.push(match);
+  const npcDone = [];
+  beginRun(); hudShow(true); hudUpdate(P, N, npc, npcDone);
+  try {
+    await say(`${npc.name}との決闘。相手は${KAMAE_NAME[npc.kamae]}、あなたは${KAMAE_NAME[P.kamae]}`);
+    for (let turn = 1; turn <= R.maxTurns; turn++) {
+      const plan = npcPlan(N, npc);
+      $("big").textContent = ""; $("sub").textContent = "";
+      await say(`${turn}ターン目`);
+      const t = await inputTurn(L, off, `${turn}ターン目`);
+      // 結果の演出（1拍ずつ）
+      document.body.classList.add("arena");
+      const beatsLog = [];
+      for (let k = 0; k < 4; k++) {
+        const r = t.res[k], pAct = gameAct(r.act), nAct = plan[k];
+        const sw = r.swing ? t.labeled.find((s) => s.onset === r.swing.onset) : null;
+        const pClean = sw ? cleanScore(sw, t.frames) : null;
+        const nClean = ATK_NAME[nAct] ? { total: +(J.npcClean[0] + Math.random() * (J.npcClean[1] - J.npcClean[0])).toFixed(3), random: true } : null;
+        const before = { pHp: P.hp, pSp: P.sp, nHp: N.hp, nSp: N.sp };
+        const o = resolveBeat(P, N, pAct, nAct, pClean, nClean);
+        npcDone.push(o.nAct);
+        beatsLog.push({ turn, k, beatMs: L, offset: off.used, judged: r.act, live: t.live[k], liveDiff: t.live[k] !== r.act, rule: r.rule, cont: !!r.cont, missFrac: r.missFrac,
+          defDur: r.defDur, peak: r.peak, swing: r.swing || null, npcPlan: nAct, before, ...o });
+        hudUpdate(P, N, npc, npcDone);
+        const words = beatWords(o);
+        if (words) say(words); else beep(500, 60, 0.2);
+        await playBeat({ k, o }, Math.max(1300, L + 200));
+        if (P.hp <= 0 || N.hp <= 0) break;
+      }
+      document.body.classList.remove("arena");
+      match.turns.push({ turn, anchorSrc: t.an.src, anchorAge: t.an.age, npcPlan: plan, beats: beatsLog, fps: shown.poseFps });
+      saveLogSoon();
+      if (P.hp <= 0 || N.hp <= 0) break;
+    }
+    match.end = { pHp: P.hp, nHp: N.hp, result: P.hp > N.hp ? "勝ち" : P.hp < N.hp ? "負け" : "引き分け", by: P.hp <= 0 || N.hp <= 0 ? "HP0" : "時間切れ" };
+    $("big").textContent = match.end.result; $("big").style.color = match.end.result === "勝ち" ? "#5fd18a" : match.end.result === "負け" ? "#e8664f" : "#fff";
+    $("sub").textContent = `自分 HP${P.hp}　${npc.name} HP${N.hp}（${match.end.by}）`;
+    await say(`${match.end.result}。あなた${P.hp}、${npc.name}${N.hp}`);
+    await wait(2500);
+  } catch (e) { if (e !== STOP) throw e; match.stopped = true; }
+  finally { document.body.classList.remove("arena"); hudShow(false); saveLogNow(); endRun(); showDuelResult(); }
+}
+$("btn-duel").onclick = runDuel;
+window.__duel = { resolveBeat, npcPlan, TABLE, cleanScore, eig3 }; // PCでの確かめ用
+for (const ms of [1200]) { const o = document.createElement("option"); o.value = ms; o.textContent = `${(ms / 1000).toFixed(1)}秒`; $("sel-beat3").append(o); }
+for (const id of ["tesshin"]) { const o = document.createElement("option"); o.value = id; o.textContent = `${NPCS[id].name}（${KAMAE_NAME[NPCS[id].kamae]}）`; $("sel-npc").append(o); }
+
+// ---------- 結果と要約 ----------
+function matchStats(m) {
+  const bs = m.turns.flatMap((t) => t.beats);
+  const g = { "優": 0, "良": 0, "可": 0, "不": 0 };
+  for (const b of bs) if (b.defender === "P" && b.grade) g[b.grade]++;
+  return {
+    bs, g,
+    given: bs.reduce((s, b) => s + b.dmgN, 0), taken: bs.reduce((s, b) => s + b.dmgP, 0),
+    open: bs.filter((b) => b.pAct === "open").length, unsure: bs.filter((b) => b.judged === "kamaeX").length,
+    clash: bs.filter((b) => b.label === "相打ち").length, liveDiff: bs.filter((b) => b.liveDiff).length,
+  };
+}
+function showDuelResult() {
+  const m = LOG.matches.at(-1);
+  if (!m) { $("duel-result").innerHTML = ""; return; }
+  const s = matchStats(m);
+  $("duel-result").innerHTML = `<div class="stat">最新の試合（${m.npcName}、1拍${m.beatMs}ms）：<b>${m.end?.result ?? "途中で止めた"}</b>　自分HP ${m.end?.pHp ?? "-"}・相手HP ${m.end?.nHp ?? "-"}　与えた${s.given}／受けた${s.taken}<br>
+    自分の防御 優${s.g["優"]} 良${s.g["良"]} 可${s.g["可"]} 不${s.g["不"]}　相打ち${s.clash}　棒立ち${s.open}　判定できない${s.unsure}</div>` +
+    `<div class="scroll"><table><tr><th>ターン</th><th style="text-align:left">自分</th><th style="text-align:left">相手</th><th style="text-align:left">結果</th></tr>` +
+    m.turns.map((t) => `<tr><td>${t.turn}</td><td style="text-align:left">${t.beats.map((b) => shortName(b.pAct)).join("・")}</td><td style="text-align:left">${t.beats.map((b) => shortName(b.nAct)).join("・")}</td><td style="text-align:left">${t.beats.map((b) => b.label || "―").join("・")}</td></tr>`).join("") + "</table></div>";
+}
+showDuelResult();
+function summaryStage3(L) {
+  const ms = LOG.matches.slice(-3);
+  if (ms.length) {
+    L.push(`## 段階3 決闘（最新${ms.length}試合）`);
+    for (const m of ms) {
+      const s = matchStats(m);
+      L.push(`### ${new Date(m.at).toLocaleTimeString()} ${m.npcName}（${KAMAE_NAME[m.npcKamae]}） 1拍${m.beatMs}ms 窓の中心${fmtOff(m.offset)} 自分${KAMAE_NAME[m.kamae]}: ${m.end ? `${m.end.result}（自分HP${m.end.pHp}・相手HP${m.end.nHp}、${m.turns.length}ターン、${m.end.by}）` : `途中で止めた（${m.turns.length}ターン）`}`);
+      L.push(`  与えた${s.given}／受けた${s.taken}　自分の防御 優${s.g["優"]} 良${s.g["良"]} 可${s.g["可"]} 不${s.g["不"]}　相打ち${s.clash}　棒立ち${s.open}　判定できない${s.unsure}　拍の途中の表示と最後の判定が違った${s.liveDiff}`);
+      for (const t of m.turns) {
+        L.push(`  ${t.turn}: 自分 ${t.beats.map((b) => shortName(b.pAct) + (b.judged === "kamaeX" ? "?" : "")).join("・")} ／ 相手 ${t.beats.map((b) => shortName(b.nAct)).join("・")} ／ ${t.beats.map((b) => `${b.label || "―"}${b.dmgP || b.dmgN ? `(${b.dmgP ? "-" + b.dmgP : ""}${b.dmgN ? "→" + b.dmgN : ""})` : ""}`).join("・")}`);
+      }
+      const cl = s.bs.filter((b) => b.cleanP);
+      if (cl.length) L.push(`  太刀筋（自分）: ${cl.map((b) => `${shortName(b.pAct)} 面${b.cleanP.plane}/速${b.cleanP.speed}/止${b.cleanP.stop}=${b.cleanP.total}`).join("、")}`);
+    }
+    L.push("");
+  }
+  const fr = LOG.free4.filter((x) => x.runId === LOG.free4.at(-1)?.runId);
+  if (fr.length) {
+    L.push(`## 自由4拍（最新${fr.length}回、1拍${fr[0].beatMs}ms）`);
+    for (const x of fr) L.push(`  ${x.i + 1}: ${x.acts.map((a) => shortName(gameAct(a)) + (a === "kamaeX" ? "?" : "")).join("・")}${x.live.some((a, k) => a !== x.acts[k]) ? `（途中の表示 ${x.live.map((a) => shortName(gameAct(a))).join("・")}）` : ""}`);
+    L.push("  ※?＝判定できず構え扱い。合っていたかは、ヒデキの記憶と照らしてください");
+    L.push("");
+  }
+}
+
+// =====================================================================
 // 準備の状態・記録
 // =====================================================================
 function showPrep() {
@@ -1291,7 +1694,7 @@ showPrep();
 function summary() {
   const L = [];
   const fpsAll = LOG.perf.filter((p) => p.body).map((p) => p.poseFps);
-  L.push(`# 拍の決闘ラボ 段階1〜2 要約（版 ${VERSION}、${new Date().toLocaleString()}）`);
+  L.push(`# 拍の決闘ラボ 段階1〜3 要約（版 ${VERSION}、${new Date().toLocaleString()}）`);
   L.push(`端末: ${navigator.userAgent.match(/\(([^)]+)\)/)?.[1] || navigator.userAgent}　骨格FPS 中央${median(fpsAll) ?? "-"}（10%点${q(fpsAll, 0.1) ?? "-"}）`);
   L.push("");
   L.push("## 構えの登録（平均±ばらつき。手の横+＝自分の右、手の高さ+＝肩より下、胴の長さ比）");
@@ -1326,6 +1729,7 @@ function summary() {
   L.push(`今の調整値: ${CFG.beatMsChoices.map((ms) => `${ms}ms→${TIMING.byBeat[ms]?.offsetMs ?? "未"}`).join("　")}`);
   L.push("");
   summaryStage2(L);
+  summaryStage3(L);
   return L.join("\n");
 }
 function refreshSummary() { $("summary").value = summary(); }
@@ -1344,14 +1748,14 @@ $("btn-dl-json").onclick = () => {
 };
 $("btn-clear").onclick = () => {
   if (!confirm("記録を全部消します（登録した構えと調整値は残ります）。先にJSONを保存しましたか？")) return;
-  LOG = newLog(); saveLogNow(); refreshSummary(); showCheck(); showTiming(); showBeatResult();
+  LOG = newLog(); saveLogNow(); refreshSummary(); showCheck(); showTiming(); showBeatResult(); showDuelResult();
 };
 
 // ---------- タブ ----------
 document.querySelectorAll("nav button[data-tab]").forEach((b) => {
   b.onclick = () => {
     document.querySelectorAll("nav button[data-tab]").forEach((x) => x.classList.toggle("on", x === b));
-    for (const id of ["prep", "kamae", "timing", "beat", "log"]) $("p-" + id).hidden = id !== b.dataset.tab;
+    for (const id of ["prep", "kamae", "timing", "beat", "duel", "log"]) $("p-" + id).hidden = id !== b.dataset.tab;
     if (b.dataset.tab === "log") refreshSummary();
   };
 });

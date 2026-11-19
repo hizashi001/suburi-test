@@ -201,6 +201,7 @@
     <label>回数</label><input type="number" id="num-kata" value="5" min="1" max="20" style="width:4em">
   </div>
   <div class="row" id="kata-sel"></div>
+  <div class="row"><button class="b s" id="btn-kata-recalc">型の記録を今の判定で計算し直す</button></div>
   <div class="mut">自分で決めた4拍を、同じ並びで繰り返します。正しい答えが分かっているので、覚えておかなくても正解率と、間違えた拍の値が記録に残ります。違った拍だけ「2拍目、突き」のように言います。</div>
   <div class="row">
     <button class="b" id="btn-free4">自由4拍（相手なし）</button>
@@ -225,7 +226,7 @@
 // 拍の決闘ラボ（使い捨ての実験）。本編（suburi-bugeicho）のファイルは読み込まない。
 // 骨格推定・指標・素振りの検出は、同じフォルダの回避判定ラボ（index.html v4）から写したもの。
 const $ = (id) => document.getElementById(id);
-const VERSION = "duel-3b 2026-11-19";
+const VERSION = "duel-3c 2026-11-19";
 const VISION = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
@@ -968,7 +969,8 @@ const DEF_HINT = {
 };
 const ATK_NAME = CFG.attacks, DEFN = CFG.defenses;
 const DEF_IDS = Object.keys(DEFN);
-const POSTURE_DEF = ["crouch", "kagamiL", "kagamiR", "tachi"]; // 姿勢で見る防御（続けていれば毎拍）
+const POSTURE_DEF = ["crouch", "kagamiL", "kagamiR", "tachi"];
+const BODY_DEF = ["stepL", "stepR", "back", "crouch", "kagamiL", "kagamiR"]; // 体の動きの防御 // 姿勢で見る防御（続けていれば毎拍）
 function actName(id) {
   if (ATK_NAME[id]) return ATK_NAME[id];
   if (DEFN[id]) return DEFN[id];
@@ -1045,7 +1047,8 @@ function defenseDurations(frames, ws, we, anc) {
       crouch: m.drop > th.crouch,
       stepL: dHip > th.step, stepR: dHip < -th.step,
       // しゃがむと胴と脚の見かけも縮むので、沈んでいる間は下がり・かがみに数えない（前回のラボの「しゃがみが先」と同じ）
-      back: m.back - st.back > th.back && m.drop <= th.crouch * 0.6,
+      // 横へ足を運ぶと見かけの大きさも少し変わるので、腰がステップの分だけ動いている間は下がりに数えない（実機 duel-3b：ステップ右→下がり）
+      back: m.back - st.back > th.back && m.drop <= th.crouch * 0.6 && Math.abs(dHip) <= th.step,
       kagamiL: m.leanX > th.leanX && Math.abs(dHip) <= th.step && m.drop <= th.crouch * 0.6,
       kagamiR: m.leanX < -th.leanX && Math.abs(dHip) <= th.step && m.drop <= th.crouch * 0.6,
       tachi: mk === "tachi",
@@ -1079,6 +1082,8 @@ function judgeBeat({ frames, labeled, ws, we, anc, used }) {
   out.defDur = D.dur; out.peak = D.peak;
   // 1. 体が画面から外れている
   if (out.missFrac >= J.offscreenFrac) return { ...out, act: "open", rule: "1 画面外" };
+  // 体の動きの防御（ステップ・下がり・しゃがみ・かがみ）で一番長く続いたもの
+  const body = BODY_DEF.filter((k) => D.dur[k] >= th.holdMs).sort((a, b) => D.dur[b] - D.dur[a])[0];
   // 2. 素振り → 攻撃
   const atks = labeled.filter((s) => s.role === "attack" && !used.has(s.onset) && s.peakT >= ws && s.peakT < we);
   if (atks.length) {
@@ -1091,11 +1096,20 @@ function judgeBeat({ frames, labeled, ws, we, anc, used }) {
     // なので例外は、下がりがはっきり出たときだけ（続いた時間 exceptBackMs 以上、縮み exceptBackMin 以上）
     const EB = J.exceptBack || { ms: 300, min: 0.08 };
     if (D.dur.back >= EB.ms && D.peak.dBack >= EB.min && a.vert === "up") return { ...out, act: "back", rule: "2例外 下がり＋振りかぶり" };
+    // 例外（実機 duel-3b の型を受けて）：体の動き（ステップ・下がり・しゃがみ・かがみ）がはっきり出ている拍では
+    //  ・弱い振り（速さの山が bodySwing.peakMin 未満）は、体と一緒に手が揺れただけとみなす（ステップ右→突き）
+    //  ・しゃがみと一緒の振り下ろし（真向・袈裟）は、刀ごと体が落ちただけとみなす（斬り上げの後のしゃがみ→真向が5回中5回）
+    const BS = J.bodySwing || { peakMin: 3, ms: 300 };
+    if (body && D.dur[body] >= BS.ms) {
+      if (sw.peak < BS.peakMin) return { ...out, act: body, rule: "2例外 体の動き＋弱い振り" };
+      if (body === "crouch" && a.vert === "down") return { ...out, act: body, rule: "2例外 しゃがみ＋振り下ろし" };
+    }
     return { ...out, act: a.id, rule: "2 素振り" };
   }
   // 3. 防御が150ms以上 → 続いた時間が一番長いもの
   // 刀立ては構えと形が近い（両手の縦の差だけが違う人もいる）ので、構えの方が長く続いた拍では刀立てにしない（実機 duel-2c で構え→刀立て 1回）
-  const best = DEF_IDS.filter((k) => D.dur[k] >= th.holdMs && !(k === "tachi" && D.dur.kamae >= D.dur.tachi)).sort((a, b) => D.dur[b] - D.dur[a])[0];
+  // 体が動いた拍は、刀立てより体の動きを答えにする（ステップや下がりの間、手が刀立ての形に見えることがある：実機 duel-3b）
+  const best = body || DEF_IDS.filter((k) => D.dur[k] >= th.holdMs && !(k === "tachi" && D.dur.kamae >= D.dur.tachi)).sort((a, b) => D.dur[b] - D.dur[a])[0];
   if (best) return { ...out, act: best, rule: "3 防御", cont: !!D.cont[best] };
   // 4. 登録した構え
   if (D.dur.kamae >= th.holdMs) return { ...out, act: "kamae", rule: "4 構え" };
@@ -1129,9 +1143,9 @@ function beatOffset(L) {
   return { raw, used: Math.round(Math.max(-c, Math.min(c, raw))) };
 }
 // 並んだ拍をまとめて判定する
-function judgeBeats(beatsT, L, off, anc) {
+function judgeBeats(beatsT, L, off, anc, src = ring) {
   const tA = beatsT[0] + off - L / 2 - 1500, tB = beatsT.at(-1) + off + L / 2 + 500;
-  const frames = ring.filter((f) => f[0] >= tA && f[0] <= tB);
+  const frames = src.filter((f) => f[0] >= tA && f[0] <= tB);
   const labeled = labelSwings(swingsOf(frames), frames, L);
   const used = new Set();
   const res = beatsT.map((B, k) => { const ws = B + off - L / 2; const r = judgeBeat({ frames, labeled, ws, we: ws + L, anc, used }); r.k = k; r.beatT = Math.round(B); return r; });
@@ -1582,7 +1596,9 @@ async function runFree4(pattern = null) {
       const t = await inputTurn(L, off, `${i + 1}回目`);
       const acts = t.res.map((r) => r.act);
       const oks = pattern ? acts.map((a, k) => gameAct(a) === pattern[k]) : null;
-      LOG.free4.push({ runId, i, at: iso(t.beats[0]), beatMs: L, offset: off, anchorSrc: t.an.src, kamae: selKamae(), pattern, oks, acts, live: t.live, beats: t.res, fps: shown.poseFps });
+      // 判定を後から計算し直せるように、コマと基準と拍の時刻も残す
+      LOG.free4.push({ runId, i, at: iso(t.beats[0]), beatMs: L, offset: off, anchorSrc: t.an.src, kamae: selKamae(), pattern, oks, acts, live: t.live, beats: t.res, fps: shown.poseFps,
+        beatsT: t.beats.map(Math.round), anchor: t.an.anchor, frames: t.frames, fields: FIELDS, version: VERSION });
       saveLogSoon();
       $("big").textContent = pattern ? `${oks.filter(Boolean).length} / 4` : acts.map((a) => shortName(gameAct(a))).join("・"); $("big").style.color = "#fff";
       $("sub").textContent = pattern ? acts.map((a, k) => `${oks[k] ? "○" : "×"}${shortName(gameAct(a))}`).join("  ") : t.live.some((a, k) => a !== acts[k]) ? `（拍の途中の表示：${t.live.map((a) => shortName(gameAct(a))).join("・")}）` : "";
@@ -1610,6 +1626,20 @@ const kataOpts = [...ATK_IDS, ...DEF_IDS, "kamae"];
 }
 $("btn-kata").onclick = () => runFree4([0, 1, 2, 3].map((k) => $(`kata-${k}`).value));
 $("btn-free4").onclick = () => runFree4(null);
+// 型の記録（duel-3c 以降）を、今の判定で計算し直す（前の判定の結果は oldActs に残す）
+$("btn-kata-recalc").onclick = () => {
+  const runs = [...new Set(LOG.free4.filter((x) => x.frames && x.pattern).map((x) => x.runId))].slice(-3);
+  if (!runs.length) { alert("計算し直せる型の記録がありません（duel-3c より前の記録はコマを残していません）"); return; }
+  let before = 0, after = 0, n = 0;
+  for (const x of LOG.free4.filter((y) => runs.includes(y.runId))) {
+    const { res } = judgeBeats(x.beatsT, x.beatMs, x.offset.used, x.anchor, x.frames);
+    x.oldActs ||= x.acts; x.oldOks ||= x.oks;
+    x.acts = res.map((r) => r.act); x.beats = res; x.oks = x.acts.map((a, k) => gameAct(a) === x.pattern[k]); x.recalc = VERSION;
+    before += x.oldOks.filter(Boolean).length; after += x.oks.filter(Boolean).length; n += 4;
+  }
+  saveLogSoon(); showDuelResult();
+  alert(`計算し直しました：最初の判定 ${before}/${n} → 今の判定 ${after}/${n}`);
+};
 
 
 // ---------- 決闘 ----------
@@ -1714,6 +1744,7 @@ function summaryStage3(L) {
       const all = fr.flatMap((x) => x.oks);
       L.push(`## 自分の型（${new Date(fr[0].at).toLocaleTimeString()}、1拍${fr[0].beatMs}ms、${fr.length}回）: ${pat.map(shortName).join("・")}　正解 ${all.filter(Boolean).length}/${all.length}`);
       L.push(`  拍ごと: ${pat.map((id, k) => `${k + 1}拍目 ${fr.filter((x) => x.oks[k]).length}/${fr.length}`).join("　")}`);
+      if (fr[0].oldOks) { const ob = fr.flatMap((x) => x.oldOks); L.push(`  計算し直し済み（${fr[0].recalc}）：最初の判定 ${ob.filter(Boolean).length}/${ob.length} → 今 ${all.filter(Boolean).length}/${all.length}`); }
       for (const x of fr) L.push(`  ${x.i + 1}: ${x.acts.map((a, k) => `${x.oks[k] ? "" : "×"}${shortName(gameAct(a))}${a === "kamaeX" ? "?" : ""}`).join("・")}`);
       for (const x of fr) x.acts.forEach((a, k) => { if (!x.oks[k]) L.push(`  × ${x.i + 1}-${k + 1} ${shortName(pat[k])}→${shortName(gameAct(a))} ${beatDetail(x.beats[k])}`); });
     } else {

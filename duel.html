@@ -200,7 +200,7 @@
   </div>
   <div class="row">
     <button class="b main" id="btn-duel">決闘開始</button>
-    <button class="b s" id="btn-duel-recalc">最新の決闘を今の判定で計算し直す</button>
+    <button class="b s" id="btn-duel-recalc">記録を今の判定で計算し直す（決闘と型）</button>
   </div>
   <div class="mut">1ターン＝「カッ×4」で数えて、「ドン×4」の各拍で1つ動く → 結果の演出。最大7ターン、時間切れは残りHPで判定。開始のあとは全部自動で進みます。試合で使う構えは「構え」タブで選んだもの。相手は4拍をターンの初めに決めます（あなたの入力は見ません）。</div>
   <div class="row">
@@ -208,7 +208,7 @@
     <label>回数</label><input type="number" id="num-kata" value="5" min="1" max="20" style="width:4em">
   </div>
   <div class="row" id="kata-sel"></div>
-  <div class="row"><button class="b s" id="btn-kata-recalc">型の記録を今の判定で計算し直す</button></div>
+  <div class="row"><button class="b s" id="btn-kata-recalc">記録を今の判定で計算し直す（決闘と型）</button></div>
   <div class="mut">自分で決めた4拍を、同じ並びで繰り返します。正しい答えが分かっているので、覚えておかなくても正解率と、間違えた拍の値が記録に残ります。違った拍だけ「2拍目、突き」のように言います。</div>
   <div class="row">
     <button class="b" id="btn-free4">自由4拍（相手なし）</button>
@@ -233,7 +233,7 @@
 // 拍の決闘ラボ（使い捨ての実験）。本編（suburi-bugeicho）のファイルは読み込まない。
 // 骨格推定・指標・素振りの検出は、同じフォルダの回避判定ラボ（index.html v4）から写したもの。
 const $ = (id) => document.getElementById(id);
-const VERSION = "duel-3n 2026-11-19";
+const VERSION = "duel-3o 2026-11-19";
 const VISION = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
@@ -1801,9 +1801,10 @@ const kataOpts = [...ATK_IDS, ...DEF_IDS, "kamae"];
 $("btn-kata").onclick = () => runFree4([0, 1, 2, 3].map((k) => $(`kata-${k}`).value));
 $("btn-free4").onclick = () => runFree4(null);
 // 型の記録（duel-3c 以降）を、今の判定で計算し直す（前の判定の結果は oldActs に残す）
-$("btn-kata-recalc").onclick = () => {
+// 型の記録を今の判定で計算し直す。結果の短い文を返す（記録が無ければ ""）
+function recalcKata() {
   const runs = [...new Set(LOG.free4.filter((x) => x.frames && x.pattern).map((x) => x.runId))].slice(-3);
-  if (!runs.length) { alert("計算し直せる型の記録がありません（duel-3c より前の記録はコマを残していません）"); return; }
+  if (!runs.length) return "";
   let before = 0, after = 0, n = 0;
   for (const x of LOG.free4.filter((y) => runs.includes(y.runId))) {
     const { res } = judgeBeats(x.beatsT, x.beatMs, x.offset.used, x.anchor, x.frames);
@@ -1811,9 +1812,15 @@ $("btn-kata-recalc").onclick = () => {
     x.acts = res.map((r) => r.act); x.beats = res; x.oks = x.acts.map((a, k) => gameAct(a) === x.pattern[k]); x.recalc = VERSION;
     before += x.oldOks.filter(Boolean).length; after += x.oks.filter(Boolean).length; n += 4;
   }
+  return `型：最初の判定 ${before}/${n} → 今の判定 ${after}/${n}`;
+}
+// 決闘と型の両方を計算し直す（ボタンはどちらもこれ。要約をコピーするときも自動で行う）
+function recalcAll() {
+  const a = recalcDuel(), b = recalcKata();
   saveLogSoon(); showDuelResult();
-  alert(`計算し直しました：最初の判定 ${before}/${n} → 今の判定 ${after}/${n}`);
-};
+  return [a, b].filter(Boolean).join("　") || "計算し直せる記録がありません（決闘は duel-3h、型は duel-3c より前の記録はコマを残していません）";
+}
+$("btn-kata-recalc").onclick = () => alert(`計算し直しました（${VERSION}）\n${recalcAll()}`);
 
 
 // ---------- 決闘 ----------
@@ -1876,18 +1883,19 @@ async function runDuel() {
 }
 $("btn-duel").onclick = runDuel;
 // 最新の決闘の判定を、今の判定で計算し直す（試合の点数は変えない。自分の行動の判定がどう変わるかだけを見る）
-$("btn-duel-recalc").onclick = () => {
+function recalcDuel() {
   const m = [...LOG.matches].reverse().find((x) => x.turns.some((t) => t.frames));
-  if (!m) { alert("計算し直せる決闘の記録がありません（duel-3h より前の記録はコマを残していません）"); return; }
+  if (!m) return "";
   let changed = 0, n = 0;
   for (const t of m.turns) {
     if (!t.frames) continue;
     const { res } = judgeBeats(t.beatsT, m.beatMs, m.offset.used, t.anchor, t.frames);
     t.beats.forEach((b, k) => { if (!res[k]) return; b.rejudged = res[k].act; b.rejudgedRule = res[k].rule; b.rejudgedSettle = res[k].settle; b.rejudgedPeak = res[k].peak; n++; if (catOf(gameAct(res[k].act)) !== catOf(gameAct(b.judged))) changed++; });
   }
-  m.recalc = VERSION; saveLogSoon();
-  alert(`計算し直しました（${VERSION}）：${n}拍のうち、攻撃・防御・構えの分け方が変わるのは ${changed}拍`);
-};
+  m.recalc = VERSION;
+  return `決闘：${n}拍のうち、攻撃・防御・構えの分け方が変わるのは ${changed}拍`;
+}
+$("btn-duel-recalc").onclick = () => alert(`計算し直しました（${VERSION}）\n${recalcAll()}`);
 window.__duel = { resolveBeat, resolveSimple, npcPlan, TABLE, cleanScore, eig3 }; // PCでの確かめ用
 for (const ms of [1200]) { const o = document.createElement("option"); o.value = ms; o.textContent = `${(ms / 1000).toFixed(1)}秒`; $("sel-beat3").append(o); }
 for (const id of ["tesshin"]) { const o = document.createElement("option"); o.value = id; o.textContent = `${NPCS[id].name}（${KAMAE_NAME[NPCS[id].kamae]}）`; $("sel-npc").append(o); }
@@ -1979,6 +1987,7 @@ function summary() {
   L.push(`# 拍の決闘ラボ 段階1〜3 要約（版 ${VERSION}、${new Date().toLocaleString()}）`);
   L.push(`端末: ${navigator.userAgent.match(/\(([^)]+)\)/)?.[1] || navigator.userAgent}　骨格FPS 中央${median(fpsAll) ?? "-"}（10%点${q(fpsAll, 0.1) ?? "-"}）`);
   L.push(`読み上げが始まらなかった回数（このページを開いてから）: ${voiceFails}　読み上げた回数（記録全体）: ${LOG.events.filter((e) => e.type === "say").length}`);
+  if (lastRecalc) L.push(`計算し直し（${VERSION}）: ${lastRecalc}`);
   L.push(`記録の数: 決闘${LOG.matches.length}試合・型と自由4拍${LOG.free4.length}回・1拍の判定${LOG.beatTests.length}拍`);
   L.push("");
   // 一部でエラーが出ても、残りは出してコピーできるようにする（決闘が要約に出ないことがあったため、段階3を先頭に）
@@ -2022,7 +2031,9 @@ function summary() {
 }
 function refreshSummary() { try { $("summary").value = summary(); } catch (e) { $("summary").value = `要約を作れませんでした：${e?.message || e}`; } }
 $("btn-refresh").onclick = refreshSummary;
+let lastRecalc = "";
 $("btn-copy").onclick = async () => {
+  try { lastRecalc = recalcAll(); } catch (e) { lastRecalc = "計算し直しでエラー：" + (e?.message || e); }
   refreshSummary();
   const t = $("summary").value;
   const what = `（版 ${VERSION}、${new Date().toLocaleTimeString()}、決闘${LOG.matches.length}試合）`;

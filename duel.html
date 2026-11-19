@@ -93,6 +93,7 @@
       <div id="dh-npc"></div>
       <div class="hb"><span>HP</span><span class="bar"><i id="dh-nhp"></i></span><b id="dh-nhpv"></b><span>スタミナ</span><span class="bar sp" id="dh-nspbar"><i id="dh-nsp"></i></span><b id="dh-nspv"></b></div>
       <div id="dh-tend"></div>
+      <div id="dh-step" style="font-size:11px;color:#888;margin-top:2px"></div>
     </div>
     <div id="dh-bottom">
       <div id="dh-me"></div>
@@ -236,7 +237,7 @@
 // 拍の決闘ラボ（使い捨ての実験）。本編（suburi-bugeicho）のファイルは読み込まない。
 // 骨格推定・指標・素振りの検出は、同じフォルダの回避判定ラボ（index.html v4）から写したもの。
 const $ = (id) => document.getElementById(id);
-const VERSION = "duel-4e 2026-11-19";
+const VERSION = "duel-4f 2026-11-20";
 const VISION = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
@@ -298,6 +299,21 @@ function saveLogNow() {
 }
 function logEvent(type, data = {}) { LOG.events.push({ t: Math.round(now()), at: iso(), type, ...data }); if (LOG.events.length > 5000) LOG.events.splice(0, 1000); saveLogSoon(); }
 logEvent("page_open", { version: VERSION });
+// duel-4f：拾えなかったエラーを記録と画面に出す（弟子の端末で決闘が固まった。原因を突き止めるため）
+let pageErrShown = false;
+function pageError(msg) {
+  logEvent("page_error", { msg: String(msg).slice(0, 300), step: typeof duelStep !== "undefined" ? duelStep : "" });
+  saveLogNow();
+  if (!pageErrShown) { pageErrShown = true; alert("エラーが出ました：" + String(msg).slice(0, 200)); }
+}
+window.addEventListener("error", (e) => pageError(e.message || e));
+window.addEventListener("unhandledrejection", (e) => pageError(e.reason?.message || e.reason || "promise"));
+// 決闘のいまの段取り（固まったとき、どこで止まったかを記録に残す）
+var duelStep = "";
+function markStep(t, m) {
+  duelStep = t; const el = document.getElementById("dh-step"); if (el) el.textContent = `${t}（${VERSION}）`;
+  if (m) { m.lastStep = t; m.lastStepAt = Math.round(now()); }
+}
 
 // ---------- 音（読み上げ・電子音・太鼓） ----------
 let ac = null, jaVoice = null;
@@ -1771,7 +1787,8 @@ function drawTrace(tr, prog, cx, base, U, hit) {
 }
 async function playBeat(st, ms) {
   const t0 = now();
-  while (now() - t0 < ms) { if (stopFlag) throw STOP; drawArena(st, (now() - t0) / ms); await new Promise((r) => requestAnimationFrame(r)); }
+  // duel-4f：画面の描き替え（requestAnimationFrame）が止まる端末・場面でも先へ進むように、50msの時計と早い方で待つ
+  while (now() - t0 < ms) { if (stopFlag) throw STOP; drawArena(st, (now() - t0) / ms); await Promise.race([new Promise((r) => requestAnimationFrame(r)), sleep(50)]); }
   drawArena(st, 1);
 }
 // 1拍の結果を短く読み上げる（自分から見た言い方）
@@ -1791,7 +1808,7 @@ async function inputTurn(L, off, label, simple = false) {
   const beats = ts.slice(4), live = [];
   for (let k = 0; k < 4; k++) { await waitUntil(ts[k] - 20); $("cue").textContent = label ? `${label}　${4 - k}` : `${4 - k}`; }
   for (let k = 0; k < 4; k++) {
-    await waitUntil(beats[k] - 20); $("cue").textContent = `${k + 1}`;
+    await waitUntil(beats[k] - 20); $("cue").textContent = `${k + 1}`; markStep(`${label || ""}：入力 ${k + 1}拍目`);
     if (k > 0) await judgeLive(k - 1);
   }
   await judgeLive(3);
@@ -1910,8 +1927,11 @@ async function runDuel() {
     for (let turn = 1; turn <= R.maxTurns; turn++) {
       const plan = npcPlan(N, npc, pHist);
       $("big").textContent = ""; $("sub").textContent = "";
+      markStep(`${turn}ターン目：読み上げ`, match); saveLogSoon();
       await say(`${turn}ターン目${P.sp < R.spCostDefense ? "。スタミナ切れ、構えで回復" : P.sp < R.spCostAttack ? "。スタミナ不足、攻撃できません" : ""}`);
+      markStep(`${turn}ターン目：入力`, match);
       const t = await inputTurn(L, off, `${turn}ターン目`, mode === "simple");
+      markStep(`${turn}ターン目：結果の計算`, match);
       // 結果の演出（1拍ずつ）
       document.body.classList.add("arena");
       const beatsLog = [];
@@ -1932,6 +1952,7 @@ async function runDuel() {
         hudUpdate(P, N, npc, npcDone);
         // duel-4c：画面に近づかなくても分かるように、拍ごとにテンポ音（カッ）を鳴らし、「第一、あなた 斬り上げ右、結果 良」と読み上げる。
         // 読み上げが終わるまで次の拍に進まない（演出の長さと読み上げの長い方）
+        markStep(`${turn}ターン目：結果 ${k + 1}拍目`, match);
         drumAt(ac.currentTime + 0.02, false);
         const words = beatWords(o);
         const mine = r.act === "kamaeX" ? "構え" : shortName(pAct).replace("・", "");
@@ -1945,6 +1966,7 @@ async function runDuel() {
       saveLogSoon();
       if (P.hp <= 0 || N.hp <= 0) break;
     }
+    markStep("試合の終わり", match);
     match.durationMs = Math.round(now() - match.t0);
     match.end = { pHp: P.hp, nHp: N.hp, result: P.hp > N.hp ? "勝ち" : P.hp < N.hp ? "負け" : "引き分け", by: P.hp <= 0 || N.hp <= 0 ? "HP0" : "時間切れ" };
     $("big").textContent = match.end.result; $("big").style.color = match.end.result === "勝ち" ? "#5fd18a" : match.end.result === "負け" ? "#e8664f" : "#fff";
@@ -2082,6 +2104,7 @@ function summaryStage3(L) {
       const s = matchStats(m);
       L.push(`### ${new Date(m.at).toLocaleTimeString()} ${m.mode === "simple" ? "［シンプル］" : "［通常］"}${m.league === "beginner" ? "［ビギナー］" : "［通常リーグ］"} ${m.npcName}（${KAMAE_NAME[m.npcKamae]}） 1拍${m.beatMs}ms 窓の中心${fmtOff(m.offset)} 自分${KAMAE_NAME[m.kamae]}: ${m.end ? `${m.end.result}（自分HP${m.end.pHp}・相手HP${m.end.nHp}、${m.turns.length}ターン、${m.end.by}）` : `途中で止めた（${m.turns.length}ターン）`}`);
       if (m.error) L.push(`  失敗: ${m.error.split(String.fromCharCode(10))[0]}`);
+      if (!m.end && m.lastStep) L.push(`  最後の段取り: ${m.lastStep}`);
       L.push(`  与えた${s.given}／受けた${s.taken}　自分の防御 優${s.g["優"]} 良${s.g["良"]} 可${s.g["可"]} 不${s.g["不"]}　相打ち${s.clash}　棒立ち${s.open}　判定できない${s.unsure}　拍の途中の表示と最後の判定が違った${s.liveDiff}`);
       for (const t of m.turns) {
         L.push(`  ${t.turn}: 自分 ${t.beats.map((b) => shortName(b.pAct) + (m.mode === "simple" ? `(${shortName(gameAct(b.judged))})` : "") + (b.judged === "kamaeX" ? "?" : "")).join("・")} ／ 相手 ${t.beats.map((b) => shortName(b.nAct)).join("・")} ／ ${t.beats.map((b) => `${b.label || "―"}${b.dmgP || b.dmgN ? `(${b.dmgP ? "-" + b.dmgP : ""}${b.dmgN ? "→" + b.dmgN : ""})` : ""}`).join("・")}`);
@@ -2145,6 +2168,7 @@ function summary() {
   L.push(`端末: ${navigator.userAgent.match(/\(([^)]+)\)/)?.[1] || navigator.userAgent}　骨格FPS 中央${median(fpsAll) ?? "-"}（10%点${q(fpsAll, 0.1) ?? "-"}）`);
   L.push(`読み上げが始まらなかった回数（このページを開いてから）: ${voiceFails}　読み上げた回数（記録全体）: ${LOG.events.filter((e) => e.type === "say").length}`);
   if (lastRecalc) L.push(`計算し直し（${VERSION}）: ${lastRecalc}`);
+  { const pe = LOG.events.filter((e) => e.type === "page_error").slice(-5); if (pe.length) L.push(`ページのエラー（最新${pe.length}件）: ${pe.map((e) => `${new Date(e.at).toLocaleTimeString()} ${e.msg}［${e.step || "-"}］`).join(" ／ ")}`); }
   L.push(`記録の数: 決闘${LOG.matches.length}試合・型と自由4拍${LOG.free4.length}回・1拍の判定${LOG.beatTests.length}拍`);
   L.push("");
   // 一部でエラーが出ても、残りは出してコピーできるようにする（決闘が要約に出ないことがあったため、段階3を先頭に）

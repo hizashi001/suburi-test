@@ -171,7 +171,7 @@
 // 拍の決闘ラボ（使い捨ての実験）。本編（suburi-bugeicho）のファイルは読み込まない。
 // 骨格推定・指標・素振りの検出は、同じフォルダの回避判定ラボ（index.html v4）から写したもの。
 const $ = (id) => document.getElementById(id);
-const VERSION = "duel-2c 2026-11-19";
+const VERSION = "duel-2d 2026-11-19";
 const VISION = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
 const MODELS = {
   lite: "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
@@ -1035,7 +1035,8 @@ function judgeBeat({ frames, labeled, ws, we, anc, used }) {
     return { ...out, act: a.id, rule: "2 素振り" };
   }
   // 3. 防御が150ms以上 → 続いた時間が一番長いもの
-  const best = DEF_IDS.filter((k) => D.dur[k] >= th.holdMs).sort((a, b) => D.dur[b] - D.dur[a])[0];
+  // 刀立ては構えと形が近い（両手の縦の差だけが違う人もいる）ので、構えの方が長く続いた拍では刀立てにしない（実機 duel-2c で構え→刀立て 1回）
+  const best = DEF_IDS.filter((k) => D.dur[k] >= th.holdMs && !(k === "tachi" && D.dur.kamae >= D.dur.tachi)).sort((a, b) => D.dur[b] - D.dur[a])[0];
   if (best) return { ...out, act: best, rule: "3 防御", cont: !!D.cont[best] };
   // 4. 登録した構え
   if (D.dur.kamae >= th.holdMs) return { ...out, act: "kamae", rule: "4 構え" };
